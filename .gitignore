@@ -8,7 +8,17 @@ context/
 # dependencies and build output
 node_modules/
 .next/
+out/
+coverage/
 .vercel
+*.tsbuildinfo
+next-env.d.ts
+
+# debug logs
+npm-debug.log*
+
+# os cruft
+.DS_Store
 
 # belt and suspenders: no PDF ever gets committed
 *.pdf
