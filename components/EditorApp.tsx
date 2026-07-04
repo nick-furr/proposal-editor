@@ -5,6 +5,9 @@ import { sha256Hex } from "@/lib/hash";
 import { cacheParse, getCachedParse } from "@/lib/parseCache";
 import { parsePages } from "@/lib/parser/parser";
 import type { ParsedDoc } from "@/lib/types";
+import { DocumentView } from "./DocumentView";
+import { ErrorBoundary } from "./ErrorBoundary";
+import { TopBar } from "./TopBar";
 import { UploadScreen, type UploadError } from "./UploadScreen";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -12,12 +15,14 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 type State =
   | { phase: "idle"; error: UploadError | null }
   | { phase: "parsing"; fileName: string }
-  | { phase: "ready"; doc: ParsedDoc; fromCache: boolean };
+  | { phase: "ready"; doc: ParsedDoc; fromCache: boolean; selectedBlockId: string | null };
 
 type Action =
   | { type: "parse_started"; fileName: string }
   | { type: "parse_failed"; error: UploadError }
-  | { type: "parse_succeeded"; doc: ParsedDoc; fromCache: boolean };
+  | { type: "parse_succeeded"; doc: ParsedDoc; fromCache: boolean }
+  | { type: "select_block"; blockId: string | null }
+  | { type: "reset" };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -26,7 +31,12 @@ function reducer(state: State, action: Action): State {
     case "parse_failed":
       return { phase: "idle", error: action.error };
     case "parse_succeeded":
-      return { phase: "ready", doc: action.doc, fromCache: action.fromCache };
+      return { phase: "ready", doc: action.doc, fromCache: action.fromCache, selectedBlockId: null };
+    case "select_block":
+      if (state.phase !== "ready") return state;
+      return { ...state, selectedBlockId: action.blockId };
+    case "reset":
+      return { phase: "idle", error: null };
   }
 }
 
@@ -87,34 +97,32 @@ export function EditorApp() {
     );
   }
 
-  const { doc, fromCache } = state;
+  const { doc, fromCache, selectedBlockId } = state;
   return (
-    <main className="mx-auto max-w-3xl p-8">
-      <header className="mb-6 flex items-baseline gap-3">
-        <h1 className="text-lg font-semibold">{doc.fileName}</h1>
-        <span className="text-sm text-muted">
-          {doc.pageCount} pages, {Object.keys(doc.blocks).length} blocks
-        </span>
-        {fromCache && (
-          <span className="rounded bg-surface px-2 py-0.5 text-xs text-accent">
-            restored from cache
-          </span>
-        )}
-      </header>
-      <div className="space-y-4">
-        {doc.sections.map((section) => (
-          <div key={section.id}>
-            {section.title && <h2 className="mb-1 font-semibold text-accent">{section.title}</h2>}
-            {section.blockIds
-              .map((id) => doc.blocks[id])
-              .filter((block) => block.kind === "paragraph")
-              .map((block) => (
-                <p key={block.id} className="mb-2 whitespace-pre-line text-sm">
-                  {block.text}
-                </p>
-              ))}
-          </div>
-        ))}
+    <main className="flex h-screen flex-col">
+      <TopBar
+        fileName={doc.fileName}
+        pageCount={doc.pageCount}
+        blockCount={Object.keys(doc.blocks).length}
+        fromCache={fromCache}
+        onReset={() => dispatch({ type: "reset" })}
+      />
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1 overflow-y-auto p-6">
+          <ErrorBoundary>
+            <DocumentView
+              doc={doc}
+              blockText={(blockId) => doc.blocks[blockId].text}
+              selectedBlockId={selectedBlockId}
+              onSelect={(blockId) => dispatch({ type: "select_block", blockId })}
+            />
+          </ErrorBoundary>
+        </div>
+        <aside className="w-96 shrink-0 overflow-y-auto border-l border-edge p-6">
+          <p className="text-sm text-muted">
+            {selectedBlockId ? "Editing arrives in the next commit." : "Select a block to edit it."}
+          </p>
+        </aside>
       </div>
     </main>
   );
