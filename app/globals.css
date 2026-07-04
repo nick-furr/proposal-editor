@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+/* Dark first: this app has one theme. */
+:root {
+  --background: #0b0d10;
+  --surface: #14171c;
+  --border: #262b33;
+  --foreground: #e6e9ee;
+  --muted: #8b94a1;
+  --accent: #5eadf2;
+  --added: #3fb96d;
+  --removed: #e5654f;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-edge: var(--border);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-added: var(--added);
+  --color-removed: var(--removed);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
