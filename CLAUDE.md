@@ -23,4 +23,5 @@ Working rules for this repo. SPEC.md is the source of truth for scope and archit
 - MECO PDFs stay in gitignored `context/`. Shared with permission for assessment is not permission to republish a real firm's proposals on public GitHub.
 - Commit history stays unsquashed and tells the story: spec, then core loop, then eval, then additions. Real commit messages, conventional style.
 - Every design decision made or revised after the spec gets appended to `context/decisions.md` with its reasoning and, if reviewer-relevant, which README section it feeds. The README distills this log at the end.
+- When a logged decision contradicts or materially changes something SPEC.md states, SPEC.md gets a dated addendum in a new commit. The log stages; the spec stays gospel by being corrected, never silently overridden.
 - No em dashes and no AI-sounding language in any writing: README, commits, UI copy, code comments.

@@ -39,6 +39,19 @@ Handoff document for the Buoyant founding engineer take-home. Everything decided
 - KB corpus shares the pipeline: same parser handles knowledge base ingestion. Consistent firm voice across all 5 docs (confirmed by their README).
 - easy.pdf entities: city names, engineer names, PE license numbers, addresses. This is the raw material for the eval golden set.
 
+## Corpus diagnostics, round 2 (pdf.js measurement, added 7/4)
+
+Round 1 above was measured with pdftotext, which applies its own layout analysis before emitting text. The app builds on pdf.js, which emits raw content-stream order (the order Canva drew the text). That evidence does not transfer between tools, so before writing any parser code the corpus was re-measured with pdf.js itself: all 7 fixtures, 118 pages, roughly 5,100 text items. Diagnostic scripts live in gitignored context/diagnostics and seed the parser unit tests. Findings, each with its consequence:
+
+- Emission order is not trustworthy across the class. easy.pdf pages score 0.85 to 1.00 on monotonic top-to-bottom order, but KB docs drop to 0.75 on their worst pages. Geometric sorting (y with tolerance, then x) is mandatory, not optional.
+- easy.pdf page 3 is a single full-width column in the text layer: the client list flows above YOUR TEAM and every line starts at the same left margin. The side-by-side-regions finding from round 1 does not survive pdf.js measurement, and true multi-column never appears in any fixture's text layer. Column handling is cut from the parser.
+- Stacked duplicates are corpus-wide and simpler than round 1 suggested: whole-string repeats on a single line (the title three times, the closing Thank You three times), not character interleaving. Dedupe rule: collapse repeated identical runs within a line.
+- Letter-spaced single-character items: zero in easy.pdf, 6 to 15 in every other doc. The rejoin rule is real for the class but moves from the core loop to KB ingestion.
+- Wide in-line gaps (over 100pt) appear in every doc and are left/right aligned pairs (address left, date right), not columns. Rule: split a line into separate spans at a large gap.
+- MECO headings (YOUR TEAM, RELEVANT EXPERIENCE) are size 12, identical to body text. A font-size heuristic alone finds zero headings here. Primary signal: ALL-CAPS short line. Fallbacks for the hidden fixture: font-size jump, then whitespace gap before the block.
+
+Net effect: two planned parser features deleted because measurement showed their problems do not exist, one promoted from optional to mandatory, and every remaining rule traceable to an observed defect. Exact tolerances get tuned against the same diagnostics during the build.
+
 ## Architecture decisions
 
 ### Parsing: source-type router (RedlineIQ pattern)
