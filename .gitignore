@@ -1,0 +1,14 @@
+# local context: gospel sources and MECO fixture PDFs (shared with permission for assessment, not for republishing)
+context/
+
+# secrets
+.env
+.env*.local
+
+# dependencies and build output
+node_modules/
+.next/
+.vercel
+
+# belt and suspenders: no PDF ever gets committed
+*.pdf
