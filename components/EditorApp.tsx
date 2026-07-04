@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { currentText, editedBlockIds, lastUndoableEvent } from "@/lib/editLog";
+import { currentText, editedBlockIds, lastUndoableEvent, loadEvents, saveEvents } from "@/lib/editLog";
 import { sha256Hex } from "@/lib/hash";
 import { cacheParse, getCachedParse } from "@/lib/parseCache";
 import { parsePages } from "@/lib/parser/parser";
@@ -34,7 +34,7 @@ type State =
 type Action =
   | { type: "parse_started"; fileName: string }
   | { type: "parse_failed"; error: UploadError }
-  | { type: "parse_succeeded"; doc: ParsedDoc; fromCache: boolean }
+  | { type: "parse_succeeded"; doc: ParsedDoc; fromCache: boolean; events: EditEvent[] }
   | { type: "select_block"; blockId: string | null }
   | { type: "reset" }
   | { type: "edit_started"; blockId: string; baseText: string; instruction: string; sectionTitle: string | null }
@@ -57,7 +57,7 @@ function reducer(state: State, action: Action): State {
         doc: action.doc,
         fromCache: action.fromCache,
         selectedBlockId: null,
-        events: [],
+        events: action.events,
         edit: null,
       };
     case "reset":
@@ -171,6 +171,12 @@ export function EditorApp() {
     return () => clearTimeout(timer);
   }, [toast]);
 
+  const fileHash = state.phase === "ready" ? state.doc.fileHash : null;
+  const eventsToSave = state.phase === "ready" ? state.events : null;
+  useEffect(() => {
+    if (fileHash && eventsToSave) saveEvents(fileHash, eventsToSave);
+  }, [fileHash, eventsToSave]);
+
   const handleFile = useCallback(async (file: File) => {
     if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
       dispatch({ type: "parse_failed", error: { kind: "wrong-type" } });
@@ -187,7 +193,7 @@ export function EditorApp() {
       const hash = await sha256Hex(buffer);
       const cached = getCachedParse(hash);
       if (cached) {
-        dispatch({ type: "parse_succeeded", doc: cached, fromCache: true });
+        dispatch({ type: "parse_succeeded", doc: cached, fromCache: true, events: loadEvents(hash) });
         return;
       }
       // pdf.js loads on first use only, and only in the browser.
@@ -209,7 +215,7 @@ export function EditorApp() {
         return;
       }
       cacheParse(doc);
-      dispatch({ type: "parse_succeeded", doc, fromCache: false });
+      dispatch({ type: "parse_succeeded", doc, fromCache: false, events: loadEvents(hash) });
     } catch {
       dispatch({ type: "parse_failed", error: { kind: "corrupt" } });
     }
