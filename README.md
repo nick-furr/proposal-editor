@@ -2,6 +2,8 @@
 
 Upload a proposal PDF, select a paragraph, ask for a rewrite, review the diff, apply or reject. Built for the Buoyant take-home.
 
+Live at [refine-proposals.vercel.app](https://refine-proposals.vercel.app).
+
 Work in progress. The full README (design decisions, cuts, failure modes, eval) lands with the final submission.
 
 ## Setup
