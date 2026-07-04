@@ -38,3 +38,27 @@ export function lastUndoableEvent(events: EditEvent[]): ApplyEvent | null {
   const candidates = applyEvents(events).filter((event) => !undone.has(event.id));
   return candidates[candidates.length - 1] ?? null;
 }
+
+// Persist the log per document so a refresh does not lose applied edits.
+// Version the key with the log shape, not the parser version.
+const LOG_VERSION = 1;
+
+const logKey = (fileHash: string) => `edits:v${LOG_VERSION}:${fileHash}`;
+
+export function loadEvents(fileHash: string): EditEvent[] {
+  try {
+    const raw = localStorage.getItem(logKey(fileHash));
+    return raw ? (JSON.parse(raw) as EditEvent[]) : [];
+  } catch {
+    // Unavailable storage or a corrupted entry means an empty history.
+    return [];
+  }
+}
+
+export function saveEvents(fileHash: string, events: EditEvent[]): void {
+  try {
+    localStorage.setItem(logKey(fileHash), JSON.stringify(events));
+  } catch {
+    // Quota or private mode: edits still work for this session.
+  }
+}
