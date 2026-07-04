@@ -1,28 +1,72 @@
 "use client";
 
-import { useCallback, useReducer } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { sha256Hex } from "@/lib/hash";
 import { cacheParse, getCachedParse } from "@/lib/parseCache";
 import { parsePages } from "@/lib/parser/parser";
-import type { ParsedDoc } from "@/lib/types";
+import type { EditEvent, ParsedDoc } from "@/lib/types";
 import { DocumentView } from "./DocumentView";
+import { EditPanel, type EditState } from "./EditPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { TopBar } from "./TopBar";
 import { UploadScreen, type UploadError } from "./UploadScreen";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
+// Fold the append-only event log over the parsed text to get a block's
+// current content.
+function currentText(doc: ParsedDoc, events: EditEvent[], blockId: string): string {
+  const undone = new Set(
+    events.flatMap((event) => (event.type === "undo" ? [event.targetEventId] : [])),
+  );
+  let text = doc.blocks[blockId].text;
+  for (const event of events) {
+    if (event.type === "apply" && event.blockId === blockId && !undone.has(event.id)) {
+      text = event.after;
+    }
+  }
+  return text;
+}
+
+function editedBlockIds(events: EditEvent[]): Set<string> {
+  const undone = new Set(
+    events.flatMap((event) => (event.type === "undo" ? [event.targetEventId] : [])),
+  );
+  return new Set(
+    events.flatMap((event) =>
+      event.type === "apply" && !undone.has(event.id) ? [event.blockId] : [],
+    ),
+  );
+}
+
+function sectionTitleFor(doc: ParsedDoc, blockId: string): string | null {
+  return doc.sections.find((section) => section.blockIds.includes(blockId))?.title ?? null;
+}
+
 type State =
   | { phase: "idle"; error: UploadError | null }
   | { phase: "parsing"; fileName: string }
-  | { phase: "ready"; doc: ParsedDoc; fromCache: boolean; selectedBlockId: string | null };
+  | {
+      phase: "ready";
+      doc: ParsedDoc;
+      fromCache: boolean;
+      selectedBlockId: string | null;
+      events: EditEvent[];
+      edit: EditState | null;
+    };
 
 type Action =
   | { type: "parse_started"; fileName: string }
   | { type: "parse_failed"; error: UploadError }
   | { type: "parse_succeeded"; doc: ParsedDoc; fromCache: boolean }
   | { type: "select_block"; blockId: string | null }
-  | { type: "reset" };
+  | { type: "reset" }
+  | { type: "edit_started"; blockId: string; baseText: string; instruction: string; sectionTitle: string | null }
+  | { type: "proposal_chunk"; text: string }
+  | { type: "proposal_done" }
+  | { type: "edit_failed"; code: string }
+  | { type: "edit_dismissed" }
+  | { type: "apply_proposal" };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -31,17 +75,113 @@ function reducer(state: State, action: Action): State {
     case "parse_failed":
       return { phase: "idle", error: action.error };
     case "parse_succeeded":
-      return { phase: "ready", doc: action.doc, fromCache: action.fromCache, selectedBlockId: null };
-    case "select_block":
-      if (state.phase !== "ready") return state;
-      return { ...state, selectedBlockId: action.blockId };
+      return {
+        phase: "ready",
+        doc: action.doc,
+        fromCache: action.fromCache,
+        selectedBlockId: null,
+        events: [],
+        edit: null,
+      };
     case "reset":
       return { phase: "idle", error: null };
+  }
+
+  if (state.phase !== "ready") return state;
+
+  switch (action.type) {
+    case "select_block":
+      // Changing selection discards any proposal; the caller aborts an
+      // in-flight stream before dispatching.
+      return { ...state, selectedBlockId: action.blockId, edit: null };
+    case "edit_started":
+      // One in-flight request at a time, by construction.
+      if (state.edit?.status === "streaming") return state;
+      return {
+        ...state,
+        edit: {
+          status: "streaming",
+          blockId: action.blockId,
+          baseText: action.baseText,
+          instruction: action.instruction,
+          sectionTitle: action.sectionTitle,
+          proposal: "",
+        },
+      };
+    case "proposal_chunk":
+      if (state.edit?.status !== "streaming") return state;
+      return { ...state, edit: { ...state.edit, proposal: state.edit.proposal + action.text } };
+    case "proposal_done": {
+      if (state.edit?.status !== "streaming") return state;
+      const edit = state.edit;
+      const proposal = edit.proposal.trim();
+      if (proposal.startsWith("REFUSED:")) {
+        return {
+          ...state,
+          edit: {
+            status: "refused",
+            blockId: edit.blockId,
+            reason: proposal.slice("REFUSED:".length).trim(),
+          },
+        };
+      }
+      if (proposal.length === 0 || proposal === edit.baseText.trim()) {
+        return {
+          ...state,
+          edit: {
+            status: "no_change",
+            blockId: edit.blockId,
+            instruction: edit.instruction,
+            sectionTitle: edit.sectionTitle,
+          },
+        };
+      }
+      return { ...state, edit: { ...edit, status: "proposed", proposal } };
+    }
+    case "edit_failed": {
+      if (state.edit?.status !== "streaming") return state;
+      const { blockId, baseText, instruction, sectionTitle } = state.edit;
+      return {
+        ...state,
+        edit: { status: "error", blockId, baseText, instruction, sectionTitle, code: action.code },
+      };
+    }
+    case "edit_dismissed":
+      return { ...state, edit: null };
+    case "apply_proposal": {
+      if (state.edit?.status !== "proposed") return state;
+      const edit = state.edit;
+      // A proposal only applies to the exact text it was made against.
+      if (edit.baseText !== currentText(state.doc, state.events, edit.blockId)) {
+        return { ...state, edit: { ...edit, status: "error", code: "stale" } };
+      }
+      const event: EditEvent = {
+        id: crypto.randomUUID(),
+        type: "apply",
+        blockId: edit.blockId,
+        sectionTitle: edit.sectionTitle,
+        before: edit.baseText,
+        after: edit.proposal,
+        instruction: edit.instruction,
+        ts: Date.now(),
+      };
+      return { ...state, events: [...state.events, event], edit: null };
+    }
+    default:
+      return state;
   }
 }
 
 export function EditorApp() {
   const [state, dispatch] = useReducer(reducer, { phase: "idle", error: null });
+  const [toast, setToast] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const handleFile = useCallback(async (file: File) => {
     if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
@@ -87,6 +227,53 @@ export function EditorApp() {
     }
   }, []);
 
+  const proposeEdit = useCallback(
+    async (blockId: string, baseText: string, instruction: string, sectionTitle: string | null) => {
+      const controller = new AbortController();
+      abortRef.current = controller;
+      dispatch({ type: "edit_started", blockId, baseText, instruction, sectionTitle });
+      try {
+        const res = await fetch("/api/edit", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            blockText: baseText,
+            instruction,
+            ...(sectionTitle ? { sectionTitle } : {}),
+          }),
+        });
+        if (!res.ok || !res.body) {
+          let code = "upstream";
+          try {
+            code = ((await res.json()) as { error?: string }).error ?? code;
+          } catch {
+            // Non-JSON error body; the generic code already covers it.
+          }
+          dispatch({ type: "edit_failed", code });
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          dispatch({ type: "proposal_chunk", text: decoder.decode(value, { stream: true }) });
+        }
+        dispatch({ type: "proposal_done" });
+      } catch {
+        if (controller.signal.aborted) return;
+        dispatch({ type: "edit_failed", code: "network" });
+      }
+    },
+    [],
+  );
+
+  const abortInFlight = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }, []);
+
   if (state.phase !== "ready") {
     return (
       <UploadScreen
@@ -97,7 +284,9 @@ export function EditorApp() {
     );
   }
 
-  const { doc, fromCache, selectedBlockId } = state;
+  const { doc, fromCache, selectedBlockId, events, edit } = state;
+  const selectedText = selectedBlockId ? currentText(doc, events, selectedBlockId) : null;
+
   return (
     <main className="flex h-screen flex-col">
       <TopBar
@@ -105,25 +294,63 @@ export function EditorApp() {
         pageCount={doc.pageCount}
         blockCount={Object.keys(doc.blocks).length}
         fromCache={fromCache}
-        onReset={() => dispatch({ type: "reset" })}
+        onReset={() => {
+          abortInFlight();
+          dispatch({ type: "reset" });
+        }}
       />
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-y-auto p-6">
           <ErrorBoundary>
             <DocumentView
               doc={doc}
-              blockText={(blockId) => doc.blocks[blockId].text}
+              blockText={(blockId) => currentText(doc, events, blockId)}
               selectedBlockId={selectedBlockId}
-              onSelect={(blockId) => dispatch({ type: "select_block", blockId })}
+              streamingBlockId={edit?.status === "streaming" ? edit.blockId : null}
+              editedBlockIds={editedBlockIds(events)}
+              onSelect={(blockId) => {
+                abortInFlight();
+                dispatch({ type: "select_block", blockId });
+              }}
             />
           </ErrorBoundary>
         </div>
         <aside className="w-96 shrink-0 overflow-y-auto border-l border-edge p-6">
-          <p className="text-sm text-muted">
-            {selectedBlockId ? "Editing arrives in the next commit." : "Select a block to edit it."}
-          </p>
+          {selectedBlockId && selectedText !== null ? (
+            <EditPanel
+              key={selectedBlockId}
+              blockText={selectedText}
+              edit={edit}
+              onPropose={(instruction) =>
+                proposeEdit(selectedBlockId, selectedText, instruction, sectionTitleFor(doc, selectedBlockId))
+              }
+              onApply={() => {
+                dispatch({ type: "apply_proposal" });
+                if (edit?.status === "proposed") {
+                  setToast(`Edit applied, ${edit.sectionTitle ?? "untitled section"}`);
+                }
+              }}
+              onReject={() => dispatch({ type: "edit_dismissed" })}
+              onRetry={() => {
+                if (edit?.status === "error") {
+                  proposeEdit(edit.blockId, edit.baseText, edit.instruction, edit.sectionTitle);
+                }
+              }}
+              onDismiss={() => {
+                abortInFlight();
+                dispatch({ type: "edit_dismissed" });
+              }}
+            />
+          ) : (
+            <p className="text-sm text-muted">Select a block to edit it.</p>
+          )}
         </aside>
       </div>
+      {toast && (
+        <div className="fixed bottom-6 right-6 rounded-lg border border-edge bg-surface px-4 py-2 text-sm shadow-lg">
+          {toast}
+        </div>
+      )}
     </main>
   );
 }

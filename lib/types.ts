@@ -28,3 +28,18 @@ export type ParsedDoc = {
   blocks: Record<string, Block>;
   sections: Section[];
 };
+
+// Append-only edit log. Undo appends rather than popping, so the whole
+// history is serializable and redo stays possible later without rework.
+export type ApplyEvent = {
+  id: string;
+  type: "apply";
+  blockId: string;
+  sectionTitle: string | null;
+  before: string;
+  after: string;
+  instruction: string;
+  ts: number;
+};
+
+export type EditEvent = ApplyEvent | { id: string; type: "undo"; targetEventId: string; ts: number };
