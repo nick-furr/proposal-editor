@@ -20,5 +20,8 @@ npm-debug.log*
 # os cruft
 .DS_Store
 
+# local browser-test artifacts
+.playwright-mcp/
+
 # belt and suspenders: no PDF ever gets committed
 *.pdf
