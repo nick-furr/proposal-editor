@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { currentText, editedBlockIds, lastUndoableEvent } from "@/lib/editLog";
 import { sha256Hex } from "@/lib/hash";
 import { cacheParse, getCachedParse } from "@/lib/parseCache";
 import { parsePages } from "@/lib/parser/parser";
@@ -8,36 +9,11 @@ import type { EditEvent, ParsedDoc } from "@/lib/types";
 import { DocumentView } from "./DocumentView";
 import { EditPanel, type EditState } from "./EditPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { HistorySidebar } from "./HistorySidebar";
 import { TopBar } from "./TopBar";
 import { UploadScreen, type UploadError } from "./UploadScreen";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
-
-// Fold the append-only event log over the parsed text to get a block's
-// current content.
-function currentText(doc: ParsedDoc, events: EditEvent[], blockId: string): string {
-  const undone = new Set(
-    events.flatMap((event) => (event.type === "undo" ? [event.targetEventId] : [])),
-  );
-  let text = doc.blocks[blockId].text;
-  for (const event of events) {
-    if (event.type === "apply" && event.blockId === blockId && !undone.has(event.id)) {
-      text = event.after;
-    }
-  }
-  return text;
-}
-
-function editedBlockIds(events: EditEvent[]): Set<string> {
-  const undone = new Set(
-    events.flatMap((event) => (event.type === "undo" ? [event.targetEventId] : [])),
-  );
-  return new Set(
-    events.flatMap((event) =>
-      event.type === "apply" && !undone.has(event.id) ? [event.blockId] : [],
-    ),
-  );
-}
 
 function sectionTitleFor(doc: ParsedDoc, blockId: string): string | null {
   return doc.sections.find((section) => section.blockIds.includes(blockId))?.title ?? null;
@@ -66,7 +42,8 @@ type Action =
   | { type: "proposal_done" }
   | { type: "edit_failed"; code: string }
   | { type: "edit_dismissed" }
-  | { type: "apply_proposal" };
+  | { type: "apply_proposal" }
+  | { type: "undo"; targetEventId: string };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -166,6 +143,17 @@ function reducer(state: State, action: Action): State {
         ts: Date.now(),
       };
       return { ...state, events: [...state.events, event], edit: null };
+    }
+    case "undo": {
+      // Only the most recent un-undone apply may be undone.
+      if (lastUndoableEvent(state.events)?.id !== action.targetEventId) return state;
+      const event: EditEvent = {
+        id: crypto.randomUUID(),
+        type: "undo",
+        targetEventId: action.targetEventId,
+        ts: Date.now(),
+      };
+      return { ...state, events: [...state.events, event] };
     }
     default:
       return state;
@@ -315,7 +303,7 @@ export function EditorApp() {
             />
           </ErrorBoundary>
         </div>
-        <aside className="w-96 shrink-0 overflow-y-auto border-l border-edge p-6">
+        <aside className="flex w-96 shrink-0 flex-col overflow-y-auto border-l border-edge p-6">
           {selectedBlockId && selectedText !== null ? (
             <EditPanel
               key={selectedBlockId}
@@ -344,6 +332,13 @@ export function EditorApp() {
           ) : (
             <p className="text-sm text-muted">Select a block to edit it.</p>
           )}
+          <div className="mt-8 border-t border-edge pt-4">
+            <h2 className="mb-3 text-sm font-semibold">History</h2>
+            <HistorySidebar
+              events={events}
+              onUndo={(targetEventId) => dispatch({ type: "undo", targetEventId })}
+            />
+          </div>
         </aside>
       </div>
       {toast && (
