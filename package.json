@@ -9,6 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "eval": "tsx eval/run.ts",
     "verify": "npm run typecheck && npm run lint && npm run test"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.5.20",
     "tailwindcss": "^4",
+    "tsx": "^4.23.0",
     "typescript": "^5",
     "vitest": "4.1.9"
   }
