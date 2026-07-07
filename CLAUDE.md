@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Working rules for this repo. SPEC.md is the source of truth for scope and architecture; when in doubt, re-read it before writing code. Gospel sources (brief, email, fixture PDFs) live in `context/`, which is gitignored and never leaves this machine.
+Working rules for this repo. SPEC.md is the source of truth for scope and architecture; when in doubt, re-read it before writing code. Gospel sources (brief, email, fixture PDFs) live in `context/`, which is gitignored and never enters the public repo. The one derived artifact that leaves this machine is the parsed KB index, which ships only to private Vercel Blob storage read by the deployed app, never to git (SPEC.md addendum 7/6).
 
 ## Stack
 - Next.js + TypeScript (take-home constraint), Tailwind CSS

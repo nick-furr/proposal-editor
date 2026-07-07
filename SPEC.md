@@ -191,3 +191,11 @@ proposal-editor/
   - Side confirmations from his answer: hidden fixture is almost certainly a digital export (parser class assumption holds); "Word or InDesign" independently validates DOCX export as the right maybe-addition and the Word add-in as the v2 endgame.
 - [x] Repo init + this spec as first commit (done 7/4)
 - [x] Laptop environment check: Node, git, Claude Code ready (verified 7/4: Node v22.14.0, git 2.54, gh authed)
+
+## Addendum 7/6: two corrections from the eval-night build
+
+Both decisions were logged in context/decisions.md as they happened and are recorded here because each changes something this spec states. Same rule as the 7/4 addendum: the log stages, the spec stays gospel by being corrected.
+
+1. The letter-spacing rejoin rule is dead; fragment glue replaced it. Round 2 diagnostics above say the single-character rejoin rule "moves from the core loop to KB ingestion." Measuring again before building it found zero letter-spaced runs in pdf.js output anywhere in the corpus. The real class-wide defect is words split into fragment items at arbitrary points ("M|icrosoft Office"), which join-with-space rendered as "M icrosoft". The gap distribution across all 7 fixtures is bimodal: fragment gaps sit under 1pt, word spaces start at 2pt, and nothing in the corpus lands between 1 and 2. Parser v2 joins items closer than 1.5pt without a space. This is the third planned parser feature deleted by measurement, and it fixed easy.pdf's "Commit tee" artifact upstream as a side effect.
+
+2. KB index delivery runs through private storage, not build time. The KB grounding section above says "ingest 5 MECO proposals with the same parser at build time." Vercel builds from the public repo, and MECO content stays out of the public repo, so build-time ingestion cannot work. Resolution: ingestion runs locally with the app's own parser, the deduped index uploads to a private Vercel Blob, and the edit route reads it with the store token, degrading to ungrounded edits with a logged notice if the blob is unavailable. MECO content still never touches git; CLAUDE.md's "never leaves this machine" line is amended to match in this commit.
