@@ -43,7 +43,8 @@ type Action =
   | { type: "edit_failed"; code: string }
   | { type: "edit_dismissed" }
   | { type: "apply_proposal" }
-  | { type: "undo"; targetEventId: string };
+  | { type: "undo"; targetEventId: string }
+  | { type: "clear_history" };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -144,6 +145,10 @@ function reducer(state: State, action: Action): State {
       };
       return { ...state, events: [...state.events, event], edit: null };
     }
+    case "clear_history":
+      // Emptying the log also reverts applied edits: currentText folds the
+      // events, so no events means the parsed original.
+      return { ...state, events: [], edit: null };
     case "undo": {
       // Only the most recent un-undone apply may be undone.
       if (lastUndoableEvent(state.events)?.id !== action.targetEventId) return state;
@@ -163,6 +168,7 @@ function reducer(state: State, action: Action): State {
 export function EditorApp() {
   const [state, dispatch] = useReducer(reducer, { phase: "idle", error: null });
   const [toast, setToast] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -170,6 +176,12 @@ export function EditorApp() {
     const timer = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!confirmClear) return;
+    const timer = setTimeout(() => setConfirmClear(false), 3000);
+    return () => clearTimeout(timer);
+  }, [confirmClear]);
 
   const fileHash = state.phase === "ready" ? state.doc.fileHash : null;
   const eventsToSave = state.phase === "ready" ? state.events : null;
@@ -345,7 +357,26 @@ export function EditorApp() {
             <p className="text-sm text-muted">Select a block to edit it.</p>
           )}
           <div className="mt-8 border-t border-edge pt-4">
-            <h2 className="mb-3 text-sm font-semibold">History</h2>
+            <div className="mb-3 flex items-baseline justify-between">
+              <h2 className="text-sm font-semibold">History</h2>
+              {events.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!confirmClear) {
+                      setConfirmClear(true);
+                      return;
+                    }
+                    dispatch({ type: "clear_history" });
+                    setConfirmClear(false);
+                    setToast("History cleared, document reset to original");
+                  }}
+                  className="text-xs text-muted transition-colors hover:text-foreground"
+                >
+                  {confirmClear ? "Really clear? Applied edits revert" : "Clear"}
+                </button>
+              )}
+            </div>
             <HistorySidebar
               events={events}
               onUndo={(targetEventId) => dispatch({ type: "undo", targetEventId })}

@@ -74,7 +74,7 @@ export function EditPanel({
         <textarea
           value={instruction}
           onChange={(e) => setInstruction(e.target.value)}
-          placeholder="Describe the change, for example: make this more concise"
+          placeholder="Describe the change, for example: make this more direct, or: the new mayor is Jane Smith, update the greeting"
           rows={3}
           className="w-full resize-none rounded-lg border border-edge bg-surface p-3 text-sm outline-none placeholder:text-muted focus:border-accent"
         />
@@ -136,6 +136,10 @@ export function EditPanel({
       {edit.status === "refused" && (
         <>
           <p className="text-sm text-muted">The model declined this edit: {edit.reason}</p>
+          <p className="text-xs text-muted">
+            Tip: say exactly what should change, and include any new facts (names, addresses,
+            dates) in the instruction.
+          </p>
           <ActionButton onClick={onDismiss}>Close</ActionButton>
         </>
       )}
