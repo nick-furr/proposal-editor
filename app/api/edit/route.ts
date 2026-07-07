@@ -24,13 +24,13 @@ function errorResponse(status: number, code: string): Response {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  let body: { blockText?: unknown; instruction?: unknown; sectionTitle?: unknown };
+  let body: { blockText?: unknown; instruction?: unknown; sectionTitle?: unknown; mode?: unknown };
   try {
     body = await req.json();
   } catch {
     return errorResponse(400, "invalid_input");
   }
-  const { blockText, instruction, sectionTitle } = body;
+  const { blockText, instruction, sectionTitle, mode } = body;
   if (
     typeof blockText !== "string" ||
     typeof instruction !== "string" ||
@@ -38,7 +38,8 @@ export async function POST(req: Request): Promise<Response> {
     instruction.trim().length === 0 ||
     blockText.length > MAX_BLOCK_CHARS ||
     instruction.length > MAX_INSTRUCTION_CHARS ||
-    (sectionTitle !== undefined && typeof sectionTitle !== "string")
+    (sectionTitle !== undefined && typeof sectionTitle !== "string") ||
+    (mode !== undefined && mode !== "json")
   ) {
     return errorResponse(400, "invalid_input");
   }
@@ -85,38 +86,60 @@ export async function POST(req: Request): Promise<Response> {
     throw err;
   }
 
+  // Usage lands on partial counts if the stream dies mid-flight; the log
+  // stays honest either way.
+  const usage = { inputTokens: 0, outputTokens: 0 };
+  const consume = async (onDelta: (text: string) => void) => {
+    for await (const event of events) {
+      if (event.type === "message_start") {
+        usage.inputTokens = event.message.usage.input_tokens;
+      } else if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+        onDelta(event.delta.text);
+      } else if (event.type === "message_delta") {
+        usage.outputTokens = event.usage.output_tokens;
+      }
+    }
+  };
+  // Latency, tokens, model, outcome only. Never document content.
+  const logCall = (outcome: string) =>
+    console.log(
+      JSON.stringify({
+        event: "edit_call",
+        model,
+        latencyMs: Date.now() - startedAt,
+        ...usage,
+        outcome,
+      }),
+    );
+
+  if (mode === "json") {
+    // The eval harness needs exact token usage, which the plain-text stream
+    // envelope drops. Same upstream call, accumulated server-side instead.
+    let text = "";
+    try {
+      await consume((t) => {
+        text += t;
+      });
+    } catch {
+      logCall("stream_error");
+      return errorResponse(502, "upstream");
+    }
+    logCall("ok");
+    return Response.json({ text, model, latencyMs: Date.now() - startedAt, ...usage });
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      let inputTokens = 0;
-      let outputTokens = 0;
       let outcome = "ok";
       try {
-        for await (const event of events) {
-          if (event.type === "message_start") {
-            inputTokens = event.message.usage.input_tokens;
-          } else if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-            controller.enqueue(encoder.encode(event.delta.text));
-          } else if (event.type === "message_delta") {
-            outputTokens = event.usage.output_tokens;
-          }
-        }
+        await consume((t) => controller.enqueue(encoder.encode(t)));
         controller.close();
       } catch (err) {
         outcome = "stream_error";
         controller.error(err);
       }
-      // Latency, tokens, model, outcome only. Never document content.
-      console.log(
-        JSON.stringify({
-          event: "edit_call",
-          model,
-          latencyMs: Date.now() - startedAt,
-          inputTokens,
-          outputTokens,
-          outcome,
-        }),
-      );
+      logCall(outcome);
     },
   });
 

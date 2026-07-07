@@ -1,0 +1,17 @@
+[
+  {
+    "id": "example-entity-swap",
+    "category": "entity-swap",
+    "instruction": "This proposal is being recycled for the City of Newtown. Replace every mention of Oldtown with Newtown.",
+    "target": {
+      "section": "SECTION TITLE AS PARSED, OR null FOR THE UNTITLED LEAD SECTION",
+      "textPrefix": "first few words of the target block, unique within the section"
+    },
+    "expect": {
+      "removeEntities": ["Oldtown"],
+      "addEntities": ["Newtown"],
+      "preserveEntities": ["Jane Doe, PE"],
+      "mustNotContain": ["REFUSED:"]
+    }
+  }
+]
