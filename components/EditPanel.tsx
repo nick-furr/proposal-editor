@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MAX_INSTRUCTION_CHARS } from "@/lib/limits";
 import { DiffView } from "./DiffView";
 
@@ -24,14 +24,17 @@ function ActionButton({
   onClick,
   children,
   primary = false,
+  autoFocus = false,
 }: {
   onClick: () => void;
   children: string;
   primary?: boolean;
+  autoFocus?: boolean;
 }) {
   return (
     <button
       type="button"
+      autoFocus={autoFocus}
       onClick={onClick}
       className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
         primary
@@ -64,6 +67,20 @@ export function EditPanel({
   const [instruction, setInstruction] = useState("");
   const overCap = instruction.length > MAX_INSTRUCTION_CHARS;
 
+  // Keyboard path for the loop: Escape rejects a proposal or cancels a
+  // stream. Apply takes focus when the diff appears, so Enter applies.
+  const status = edit?.status;
+  useEffect(() => {
+    if (status !== "proposed" && status !== "streaming") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (status === "proposed") onReject();
+      else onDismiss();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [status, onReject, onDismiss]);
+
   if (edit === null) {
     return (
       <div className="space-y-3">
@@ -73,6 +90,7 @@ export function EditPanel({
         </p>
         <textarea
           value={instruction}
+          autoFocus
           onChange={(e) => setInstruction(e.target.value)}
           placeholder="Describe the change, for example: make this more direct, or: the new mayor is Jane Smith, update the greeting"
           rows={3}
@@ -118,7 +136,7 @@ export function EditPanel({
         <>
           <DiffView before={edit.baseText} after={edit.proposal} />
           <div className="flex gap-2">
-            <ActionButton primary onClick={onApply}>
+            <ActionButton primary autoFocus onClick={onApply}>
               Apply
             </ActionButton>
             <ActionButton onClick={onReject}>Reject</ActionButton>
