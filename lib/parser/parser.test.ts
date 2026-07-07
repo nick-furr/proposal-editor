@@ -39,6 +39,35 @@ describe("stacked text dedupe", () => {
   });
 });
 
+describe("fragment glue at near-zero gaps", () => {
+  it("rejoins a word split into a leading letter and its remainder", () => {
+    // Measured shape: "M|icrosoft Office" with a 0pt gap between items.
+    const lines = buildLines([
+      item("M", 60, 500, 12, 8),
+      item("icrosoft Office", 68, 500, 12, 80),
+    ]);
+    expect(lines[0].spans).toEqual(["Microsoft Office"]);
+  });
+
+  it("rejoins multi-fragment splits mid-word", () => {
+    // Measured shape: "P|an|el Room" split at arbitrary points, gaps under 1pt.
+    const lines = buildLines([
+      item("P", 60, 500, 12, 6),
+      item("an", 66.3, 500, 12, 10),
+      item("el Room", 76.8, 500, 12, 40),
+    ]);
+    expect(lines[0].spans).toEqual(["Panel Room"]);
+  });
+
+  it("keeps a space at ordinary word gaps", () => {
+    const lines = buildLines([
+      item("Selection", 60, 500, 12, 50),
+      item("Committee", 114, 500, 12, 52),
+    ]);
+    expect(lines[0].spans).toEqual(["Selection Committee"]);
+  });
+});
+
 describe("span splitting at wide gaps", () => {
   it("splits left/right aligned pairs instead of fusing them", () => {
     // Address on the left margin, date on the right; the gap is over 100pt.
