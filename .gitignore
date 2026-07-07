@@ -25,3 +25,5 @@ npm-debug.log*
 
 # belt and suspenders: no PDF ever gets committed
 *.pdf
+
+.env*
