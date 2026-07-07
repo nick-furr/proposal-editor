@@ -3,13 +3,17 @@ import type { Block, ParsedDoc, RawItem, Section } from "../types";
 // Every rule below exists because a measurement of the fixture corpus demanded
 // it (see SPEC.md, corpus diagnostics round 2). Bump when output shape or rules
 // change so the parse cache never serves stale structure.
-export const PARSER_VERSION = 1;
+export const PARSER_VERSION = 2;
 
 // Items within this vertical distance belong to one visual line.
 const LINE_Y_TOL = 3;
 // A wider in-line gap means left/right aligned spans (address left, date
 // right), never columns; measured in every fixture.
 const SPAN_GAP = 100;
+// The corpus splits words into fragment items at near-zero gaps
+// ("M|icrosoft", "Commit|tee,"). Measured gap distribution is bimodal:
+// fragments sit under 1pt, word spaces start at 2pt, nothing in between.
+const GLUE_GAP = 1.5;
 // A vertical gap this many times the typical leading starts a new block.
 const BLOCK_GAP_FACTOR = 1.8;
 // A line repeating at the same y-band on this many pages is page furniture.
@@ -54,13 +58,22 @@ export function buildLines(items: RawItem[]): Line[] {
     let prev: RawItem | undefined;
     for (const item of inLine) {
       const text = item.str.replace(/\s+/g, " ").trim();
-      if (prev && item.x - (prev.x + prev.w) > SPAN_GAP && parts.length > 0) {
+      const gap = prev ? item.x - (prev.x + prev.w) : Infinity;
+      if (gap > SPAN_GAP && parts.length > 0) {
         spans.push(parts.join(" "));
         parts = [];
       }
       // Stacked Canva text effects emit whole-string repeats at near-identical
-      // coordinates; consecutive identical runs collapse to one.
-      if (parts[parts.length - 1] !== text) {
+      // coordinates; consecutive identical runs collapse to one. Checked
+      // before the glue rule: a stacked copy overlaps its original, so its
+      // gap is a large negative number, never a fragment gap.
+      if (parts[parts.length - 1] === text) {
+        prev = item;
+        continue;
+      }
+      if (parts.length > 0 && Math.abs(gap) < GLUE_GAP) {
+        parts[parts.length - 1] += text;
+      } else {
         parts.push(text);
       }
       prev = item;
