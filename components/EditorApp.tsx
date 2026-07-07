@@ -288,6 +288,12 @@ export function EditorApp() {
         pageCount={doc.pageCount}
         blockCount={Object.keys(doc.blocks).length}
         fromCache={fromCache}
+        onExport={() => {
+          // docx loads on first use only, mirroring the pdf.js pattern.
+          import("@/lib/exportDocx")
+            .then(({ downloadDocx }) => downloadDocx(doc, (blockId) => currentText(doc, events, blockId)))
+            .catch(() => setToast("Export failed"));
+        }}
         onReset={() => {
           abortInFlight();
           dispatch({ type: "reset" });

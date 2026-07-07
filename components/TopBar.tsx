@@ -5,12 +5,14 @@ export function TopBar({
   pageCount,
   blockCount,
   fromCache,
+  onExport,
   onReset,
 }: {
   fileName: string;
   pageCount: number;
   blockCount: number;
   fromCache: boolean;
+  onExport: () => void;
   onReset: () => void;
 }) {
   return (
@@ -26,8 +28,15 @@ export function TopBar({
       )}
       <button
         type="button"
-        onClick={onReset}
+        onClick={onExport}
         className="ml-auto shrink-0 text-xs text-muted transition-colors hover:text-foreground"
+      >
+        Export DOCX
+      </button>
+      <button
+        type="button"
+        onClick={onReset}
+        className="shrink-0 text-xs text-muted transition-colors hover:text-foreground"
       >
         New file
       </button>
