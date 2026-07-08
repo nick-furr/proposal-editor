@@ -119,12 +119,13 @@ export function findChannel(items: RawItem[]): { x0: number; x1: number } | null
       continue;
     }
     if (start !== null && x - start >= COLUMN_MIN_WIDTH) {
+      const x0 = start;
       const x1 = x - COLUMN_STEP;
-      const left = items.filter((it) => it.x + it.w <= start + COLUMN_EDGE_TOL).length;
+      const left = items.filter((it) => it.x + it.w <= x0 + COLUMN_EDGE_TOL).length;
       const right = items.filter((it) => it.x >= x1 - COLUMN_EDGE_TOL).length;
       const minority = Math.min(left, right) / items.length;
-      if (minority >= COLUMN_MIN_SIDE && (!best || x1 - start > best.x1 - best.x0)) {
-        best = { x0: start, x1 };
+      if (minority >= COLUMN_MIN_SIDE && (!best || x1 - x0 > best.x1 - best.x0)) {
+        best = { x0, x1 };
       }
     }
     start = null;
