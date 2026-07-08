@@ -22,6 +22,35 @@ export type ConsistencyFinding = {
   followUp?: string;
 };
 
+// Parse the judge route's model reply. The model speaks JSON here, not
+// prose; anything unparseable returns null and the caller falls back to the
+// deterministic tier.
+export function parseFindings(raw: string, candidateIds: Set<string>): ConsistencyFinding[] | null {
+  const stripped = raw.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripped);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const findings: ConsistencyFinding[] = [];
+  for (const item of parsed) {
+    if (typeof item !== "object" || item === null) return null;
+    const { blockId, stale, reason, followUp } = item as Record<string, unknown>;
+    if (typeof blockId !== "string" || typeof stale !== "boolean" || !candidateIds.has(blockId)) {
+      return null;
+    }
+    findings.push({
+      blockId,
+      stale,
+      ...(typeof reason === "string" ? { reason } : {}),
+      ...(typeof followUp === "string" ? { followUp } : {}),
+    });
+  }
+  return findings;
+}
+
 // Sentence openers pass the capitalization test without naming anything.
 const OPENERS = new Set([
   "The", "A", "An", "This", "That", "These", "Those", "We", "Our", "It",

@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { scanDocument, type ConsistencyFinding, type ConsistencyScan } from "@/lib/consistency";
 import { currentText, editedBlockIds, lastUndoableEvent, loadEvents, saveEvents } from "@/lib/editLog";
 import { sha256Hex } from "@/lib/hash";
 import { cacheParse, getCachedParse } from "@/lib/parseCache";
 import { parsePages } from "@/lib/parser/parser";
 import type { EditEvent, ParsedDoc } from "@/lib/types";
+import { ConsistencyCard, type ConsistencyStatus } from "./ConsistencyCard";
 import { DocumentView } from "./DocumentView";
 import { EditPanel, type EditState } from "./EditPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -165,11 +167,20 @@ function reducer(state: State, action: Action): State {
   }
 }
 
+type ConsistencyUi = {
+  scan: ConsistencyScan;
+  status: ConsistencyStatus;
+  findings: ConsistencyFinding[];
+} | null;
+
 export function EditorApp() {
   const [state, dispatch] = useReducer(reducer, { phase: "idle", error: null });
   const [toast, setToast] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [consistency, setConsistency] = useState<ConsistencyUi>(null);
+  const [prefill, setPrefill] = useState<{ blockId: string; instruction: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const consistencyAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!toast) return;
@@ -280,6 +291,68 @@ export function EditorApp() {
     abortRef.current = null;
   }, []);
 
+  const clearConsistency = useCallback(() => {
+    consistencyAbortRef.current?.abort();
+    consistencyAbortRef.current = null;
+    setConsistency(null);
+  }, []);
+
+  const runConsistencyCheck = useCallback(
+    async (
+      doc: ParsedDoc,
+      events: EditEvent[],
+      applied: { blockId: string; before: string; after: string; instruction: string },
+    ) => {
+      consistencyAbortRef.current?.abort();
+      // Other blocks are unaffected by this apply, so pre-apply events fold
+      // to the correct current text for every candidate.
+      const texts: Record<string, string> = {};
+      for (const id of Object.keys(doc.blocks)) {
+        if (id !== applied.blockId) texts[id] = currentText(doc, events, id);
+      }
+      const scan = scanDocument(applied.before, applied.after, applied.blockId, texts);
+      if (scan.hits.length === 0 && scan.departed.length === 0) {
+        setConsistency(null);
+        return;
+      }
+      if (scan.hits.length === 0) {
+        setConsistency({ scan, status: "judged", findings: [] });
+        return;
+      }
+      setConsistency({ scan, status: "checking", findings: [] });
+      const byBlock = new Map<string, string[]>();
+      for (const hit of scan.hits) {
+        byBlock.set(hit.blockId, [...(byBlock.get(hit.blockId) ?? []), hit.entity]);
+      }
+      const candidates = [...byBlock.entries()]
+        .slice(0, 5)
+        .map(([blockId, entities]) => ({ blockId, text: texts[blockId], entities }));
+      const controller = new AbortController();
+      consistencyAbortRef.current = controller;
+      try {
+        const res = await fetch("/api/consistency", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            instruction: applied.instruction,
+            before: applied.before,
+            after: applied.after,
+            candidates,
+          }),
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const { findings } = (await res.json()) as { findings: ConsistencyFinding[] };
+        setConsistency({ scan, status: "judged", findings });
+      } catch {
+        // The judge is advisory; losing it degrades to the lexical hits.
+        if (controller.signal.aborted) return;
+        setConsistency({ scan, status: "unavailable", findings: [] });
+      }
+    },
+    [],
+  );
+
   if (state.phase !== "ready") {
     return (
       <UploadScreen
@@ -308,6 +381,8 @@ export function EditorApp() {
         }}
         onReset={() => {
           abortInFlight();
+          clearConsistency();
+          setPrefill(null);
           dispatch({ type: "reset" });
         }}
       />
@@ -322,6 +397,8 @@ export function EditorApp() {
               editedBlockIds={editedBlockIds(events)}
               onSelect={(blockId) => {
                 abortInFlight();
+                // A manual click never inherits a follow-up suggestion.
+                setPrefill(null);
                 dispatch({ type: "select_block", blockId });
               }}
             />
@@ -333,13 +410,25 @@ export function EditorApp() {
               key={selectedBlockId}
               blockText={selectedText}
               edit={edit}
+              initialInstruction={prefill?.blockId === selectedBlockId ? prefill.instruction : undefined}
               onPropose={(instruction) =>
                 proposeEdit(selectedBlockId, selectedText, instruction, sectionTitleFor(doc, selectedBlockId))
               }
               onApply={() => {
+                // Mirrors the reducer's stale-apply guard so the check never
+                // runs for an apply the reducer rejected.
+                const willApply =
+                  edit?.status === "proposed" &&
+                  edit.baseText === currentText(doc, events, edit.blockId);
                 dispatch({ type: "apply_proposal" });
-                if (edit?.status === "proposed") {
+                if (willApply && edit.status === "proposed") {
                   setToast(`Edit applied, ${edit.sectionTitle ?? "untitled section"}`);
+                  void runConsistencyCheck(doc, events, {
+                    blockId: edit.blockId,
+                    before: edit.baseText,
+                    after: edit.proposal,
+                    instruction: edit.instruction,
+                  });
                 }
               }}
               onReject={() => dispatch({ type: "edit_dismissed" })}
@@ -356,6 +445,28 @@ export function EditorApp() {
           ) : (
             <p className="text-sm text-muted">Select a block to edit it.</p>
           )}
+          {consistency && (
+            <ConsistencyCard
+              scan={consistency.scan}
+              status={consistency.status}
+              findings={consistency.findings}
+              blockLabel={(blockId) =>
+                sectionTitleFor(doc, blockId) ?? `page ${doc.blocks[blockId].page}`
+              }
+              blockText={(blockId) => currentText(doc, events, blockId)}
+              onFollowUp={(blockId, instruction) => {
+                abortInFlight();
+                setPrefill({ blockId, instruction });
+                dispatch({ type: "select_block", blockId });
+                // Show the user what they are about to fix; the panel alone
+                // does not reveal where the block sits in the document.
+                // Instant, not smooth: the edit panel autofocuses on remount
+                // and that focus scroll cancels an in-flight smooth animation.
+                document.getElementById(blockId)?.scrollIntoView({ block: "center" });
+              }}
+              onDismiss={clearConsistency}
+            />
+          )}
           <div className="mt-8 border-t border-edge pt-4">
             <div className="mb-3 flex items-baseline justify-between">
               <h2 className="text-sm font-semibold">History</h2>
@@ -368,6 +479,7 @@ export function EditorApp() {
                       return;
                     }
                     abortInFlight();
+                    clearConsistency();
                     dispatch({ type: "clear_history" });
                     setConfirmClear(false);
                     setToast("History cleared, document reset to original");
@@ -380,7 +492,11 @@ export function EditorApp() {
             </div>
             <HistorySidebar
               events={events}
-              onUndo={(targetEventId) => dispatch({ type: "undo", targetEventId })}
+              onUndo={(targetEventId) => {
+                // Undoing invalidates the card's premise; drop it.
+                clearConsistency();
+                dispatch({ type: "undo", targetEventId });
+              }}
             />
           </div>
         </aside>

@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ConfigError, getAnthropic } from "@/lib/anthropic";
-import type { ConsistencyFinding } from "@/lib/consistency";
+import { parseFindings } from "@/lib/consistency";
 import { MAX_BLOCK_CHARS, MAX_INSTRUCTION_CHARS } from "@/lib/limits";
 
 export const runtime = "nodejs";
@@ -39,34 +39,6 @@ function validCandidate(c: unknown): c is Candidate {
 
 function errorResponse(status: number, code: string): Response {
   return Response.json({ error: code }, { status });
-}
-
-// The model speaks JSON here, not prose; anything unparseable is treated as
-// an upstream failure so the client falls back to the deterministic tier.
-function parseFindings(raw: string, candidateIds: Set<string>): ConsistencyFinding[] | null {
-  const stripped = raw.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripped);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed)) return null;
-  const findings: ConsistencyFinding[] = [];
-  for (const item of parsed) {
-    if (typeof item !== "object" || item === null) return null;
-    const { blockId, stale, reason, followUp } = item as Record<string, unknown>;
-    if (typeof blockId !== "string" || typeof stale !== "boolean" || !candidateIds.has(blockId)) {
-      return null;
-    }
-    findings.push({
-      blockId,
-      stale,
-      ...(typeof reason === "string" ? { reason } : {}),
-      ...(typeof followUp === "string" ? { followUp } : {}),
-    });
-  }
-  return findings;
 }
 
 export async function POST(req: Request): Promise<Response> {

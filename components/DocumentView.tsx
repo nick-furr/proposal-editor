@@ -3,12 +3,14 @@
 import type { ParsedDoc } from "@/lib/types";
 
 function BlockView({
+  id,
   text,
   selected,
   streaming,
   edited,
   onSelect,
 }: {
+  id: string;
   text: string;
   selected: boolean;
   streaming: boolean;
@@ -18,6 +20,7 @@ function BlockView({
   return (
     <button
       type="button"
+      id={id}
       onClick={onSelect}
       aria-pressed={selected}
       className={`relative w-full rounded-lg border p-3 text-left text-sm leading-relaxed whitespace-pre-line transition-colors ${
@@ -57,8 +60,14 @@ export function DocumentView({
       {doc.sections.map((section) => (
         <section key={section.id}>
           {section.title && (
-            <h2 className="mb-2 text-sm font-semibold tracking-wide text-accent">
-              {section.title}
+            <h2
+              id={section.blockIds[0]}
+              className="mb-2 text-sm font-semibold tracking-wide text-accent"
+            >
+              {/* The heading block's current text, not the parse-time title:
+                  consistency follow-ups can edit heading blocks, and the DOCX
+                  export already renders them with edits folded in. */}
+              {blockText(section.blockIds[0])}
             </h2>
           )}
           <div className="space-y-1">
@@ -68,6 +77,7 @@ export function DocumentView({
               .map((block) => (
                 <BlockView
                   key={block.id}
+                  id={block.id}
                   text={blockText(block.id)}
                   selected={block.id === selectedBlockId}
                   streaming={block.id === streamingBlockId}

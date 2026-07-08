@@ -50,6 +50,7 @@ function ActionButton({
 export function EditPanel({
   blockText,
   edit,
+  initialInstruction,
   onPropose,
   onApply,
   onReject,
@@ -58,13 +59,16 @@ export function EditPanel({
 }: {
   blockText: string;
   edit: EditState | null;
+  initialInstruction?: string;
   onPropose: (instruction: string) => void;
   onApply: () => void;
   onReject: () => void;
   onRetry: () => void;
   onDismiss: () => void;
 }) {
-  const [instruction, setInstruction] = useState("");
+  // Seeded by consistency follow-ups; the per-block key remounts the panel,
+  // so the initial value lands without an effect.
+  const [instruction, setInstruction] = useState(initialInstruction ?? "");
   const overCap = instruction.length > MAX_INSTRUCTION_CHARS;
 
   // Keyboard path for the loop: Escape rejects a proposal or cancels a

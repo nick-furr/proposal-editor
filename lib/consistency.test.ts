@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { containsEntity, scanDocument } from "./consistency";
+import { containsEntity, parseFindings, scanDocument } from "./consistency";
 
 describe("scanDocument", () => {
   it("flags another block that still mentions a swapped city", () => {
@@ -59,5 +59,44 @@ describe("containsEntity", () => {
     expect(containsEntity("a 55 mile radius", "55")).toBe(true);
     expect(containsEntity("call 555-1212", "55")).toBe(false);
     expect(containsEntity("Dixonville is elsewhere", "Dixon")).toBe(false);
+  });
+
+  it("matches hyphenated mentions", () => {
+    expect(containsEntity("a Dixon-based firm", "Dixon")).toBe(true);
+  });
+});
+
+describe("scanDocument entity cap", () => {
+  it("caps removed entities so a rewrite cannot flood the judge", () => {
+    const names = Array.from({ length: 10 }, (_, i) => `Firstname Lastname${i}.`);
+    const before = `Team: ${names.join(" ")}`;
+    const scan = scanDocument(before, "Team: reorganized.", "b1", {
+      b2: names.map((n) => n.replace(".", "")).join(" and "),
+    });
+    expect(new Set(scan.hits.map((h) => h.entity)).size).toBe(8);
+  });
+});
+
+describe("parseFindings", () => {
+  const ids = new Set(["b2", "b3"]);
+
+  it("parses a plain JSON array and keeps only string extras", () => {
+    const raw = '[{"blockId":"b2","stale":true,"reason":"r","followUp":"f"},{"blockId":"b3","stale":false}]';
+    expect(parseFindings(raw, ids)).toEqual([
+      { blockId: "b2", stale: true, reason: "r", followUp: "f" },
+      { blockId: "b3", stale: false },
+    ]);
+  });
+
+  it("strips a code fence around the array", () => {
+    const raw = '```json\n[{"blockId":"b2","stale":false}]\n```';
+    expect(parseFindings(raw, ids)).toEqual([{ blockId: "b2", stale: false }]);
+  });
+
+  it("rejects prose, non-arrays, unknown block ids, and missing verdicts", () => {
+    expect(parseFindings("I could not find issues.", ids)).toBeNull();
+    expect(parseFindings('{"blockId":"b2","stale":true}', ids)).toBeNull();
+    expect(parseFindings('[{"blockId":"b9","stale":true}]', ids)).toBeNull();
+    expect(parseFindings('[{"blockId":"b2"}]', ids)).toBeNull();
   });
 });
