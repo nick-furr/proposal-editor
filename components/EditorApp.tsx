@@ -191,6 +191,10 @@ type ConsistencyUi = {
   status: ConsistencyStatus;
   findings: ConsistencyFinding[];
   source: ConsistencySource;
+  // The card this one replaced. Undoing the source apply restores it,
+  // revalidated, so findings that outlive the undone apply stay visible
+  // instead of leaving live inconsistencies with no card.
+  prev: ConsistencyUi;
 } | null;
 
 export function EditorApp() {
@@ -323,10 +327,10 @@ export function EditorApp() {
   // there are any. Owns the abort handoff: entering here supersedes
   // whatever judge call was in flight.
   const judgeScan = useCallback(
-    async (scan: ConsistencyScan, source: ConsistencySource, texts: Record<string, string>) => {
+    async (scan: ConsistencyScan, source: ConsistencySource, texts: Record<string, string>, prev: ConsistencyUi) => {
       consistencyAbortRef.current?.abort();
       const publish = (status: ConsistencyStatus, findings: ConsistencyFinding[]) =>
-        setConsistency({ scan, status, findings, source });
+        setConsistency({ scan, status, findings, source, prev });
       if (scan.hits.length === 0) {
         publish("judged", []);
         return;
@@ -387,7 +391,7 @@ export function EditorApp() {
         setConsistency({ ...card, scan });
         return;
       }
-      void judgeScan(scan, card.source, texts);
+      void judgeScan(scan, card.source, texts, card.prev);
     },
     [clearConsistency, judgeScan],
   );
@@ -409,7 +413,7 @@ export function EditorApp() {
         refreshCard(card, texts);
         return;
       }
-      void judgeScan(scan, applied, texts);
+      void judgeScan(scan, applied, texts, card);
     },
     [judgeScan, refreshCard],
   );
@@ -556,10 +560,27 @@ export function EditorApp() {
             <HistorySidebar
               events={events}
               onUndo={(targetEventId) => {
-                // Only undoing the card's own source apply invalidates its
-                // findings; undoing an unrelated edit keeps the triage list.
-                if (targetEventId === consistency?.source.eventId) {
-                  clearConsistency();
+                if (consistency) {
+                  const undone = events.find((e) => e.id === targetEventId);
+                  if (undone?.type === "apply") {
+                    // The document as it stands once this undo lands.
+                    const texts: Record<string, string> = {};
+                    for (const id of Object.keys(doc.blocks)) {
+                      texts[id] = id === undone.blockId ? undone.before : currentText(doc, events, id);
+                    }
+                    if (targetEventId === consistency.source.eventId) {
+                      // The card's premise is reverted; bring back the card
+                      // it replaced, revalidated, rather than dropping
+                      // findings the undone apply never resolved.
+                      const prev = consistency.prev;
+                      clearConsistency();
+                      refreshCard(prev, texts);
+                    } else {
+                      // An unrelated undo can restore a tracked mention as
+                      // easily as an edit can remove one.
+                      refreshCard(consistency, texts);
+                    }
+                  }
                 }
                 dispatch({ type: "undo", targetEventId });
               }}
