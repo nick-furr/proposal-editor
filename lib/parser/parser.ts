@@ -3,7 +3,7 @@ import type { Block, ParsedDoc, RawItem, Section } from "../types";
 // Every rule below exists because a measurement of the fixture corpus demanded
 // it (see SPEC.md, corpus diagnostics round 2). Bump when output shape or rules
 // change so the parse cache never serves stale structure.
-export const PARSER_VERSION = 3;
+export const PARSER_VERSION = 4;
 
 // Items within this vertical distance belong to one visual line.
 const LINE_Y_TOL = 3;

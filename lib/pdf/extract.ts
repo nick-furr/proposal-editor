@@ -42,6 +42,11 @@ export async function extractPages(buffer: ArrayBuffer): Promise<ExtractResult> 
       const items: RawItem[] = [];
       for (const item of content.items) {
         if (!("str" in item) || item.str.trim().length === 0) continue;
+        // Rotated text is decoration in this document class (vertical
+        // "Thank You" art, margin tabs), measured corpus-wide: no body text
+        // is ever rotated. The geometric rules assume horizontal items, so
+        // rotated ones are excluded rather than mangled.
+        if (Math.abs(Math.atan2(item.transform[1], item.transform[0])) > 0.1) continue;
         items.push({
           str: item.str,
           x: item.transform[4],

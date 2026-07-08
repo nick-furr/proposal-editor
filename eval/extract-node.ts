@@ -16,6 +16,8 @@ export async function extractPdfPages(path: string): Promise<RawItem[][]> {
     const items: RawItem[] = [];
     for (const item of content.items) {
       if (!("str" in item) || item.str.trim().length === 0) continue;
+      // Mirrors the rotated-text exclusion in lib/pdf/extract.ts.
+      if (Math.abs(Math.atan2(item.transform[1], item.transform[0])) > 0.1) continue;
       items.push({
         str: item.str,
         x: item.transform[4],
