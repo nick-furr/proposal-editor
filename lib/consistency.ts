@@ -22,9 +22,25 @@ export type ConsistencyFinding = {
   followUp?: string;
 };
 
+// The judge call carries at most this many candidate blocks; the client
+// slice and the route validation both import it so they cannot drift.
+export const MAX_CANDIDATES = 5;
+
+// One grouping for both the judge request and the card, so the blocks sent
+// and the blocks rendered always line up.
+export function groupHitsByBlock(hits: ConsistencyHit[]): Map<string, string[]> {
+  const byBlock = new Map<string, string[]>();
+  for (const hit of hits) {
+    byBlock.set(hit.blockId, [...(byBlock.get(hit.blockId) ?? []), hit.entity]);
+  }
+  return byBlock;
+}
+
 // Parse the judge route's model reply. The model speaks JSON here, not
 // prose; anything unparseable returns null and the caller falls back to the
-// deterministic tier.
+// deterministic tier. An item keyed to an unknown block is skipped rather
+// than failing the batch: one stray element the model appended must not
+// discard every valid verdict.
 export function parseFindings(raw: string, candidateIds: Set<string>): ConsistencyFinding[] | null {
   const stripped = raw.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
   let parsed: unknown;
@@ -38,9 +54,8 @@ export function parseFindings(raw: string, candidateIds: Set<string>): Consisten
   for (const item of parsed) {
     if (typeof item !== "object" || item === null) return null;
     const { blockId, stale, reason, followUp } = item as Record<string, unknown>;
-    if (typeof blockId !== "string" || typeof stale !== "boolean" || !candidateIds.has(blockId)) {
-      return null;
-    }
+    if (typeof blockId !== "string" || typeof stale !== "boolean") return null;
+    if (!candidateIds.has(blockId)) continue;
     findings.push({
       blockId,
       stale,
@@ -87,8 +102,10 @@ function entityRuns(text: string): string[] {
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const entityPattern = (entity: string) => new RegExp(`(^|\\W)${escapeRegExp(entity)}(\\W|$)`);
+
 export function containsEntity(text: string, entity: string): boolean {
-  return new RegExp(`(^|\\W)${escapeRegExp(entity)}(\\W|$)`).test(text);
+  return entityPattern(entity).test(text);
 }
 
 // Guards against a pathological diff flooding the judge call.
@@ -117,12 +134,15 @@ export function scanDocument(
   blockTexts: Record<string, string>,
 ): ConsistencyScan {
   const entities = removedEntities(before, after);
+  // Compiled once per entity, not once per block-entity pair; the scan runs
+  // synchronously on every apply against every block in the document.
+  const patterns = entities.map((entity) => ({ entity, pattern: entityPattern(entity) }));
   const hits: ConsistencyHit[] = [];
   const found = new Set<string>();
   for (const [blockId, text] of Object.entries(blockTexts)) {
     if (blockId === editedBlockId) continue;
-    for (const entity of entities) {
-      if (containsEntity(text, entity)) {
+    for (const { entity, pattern } of patterns) {
+      if (pattern.test(text)) {
         hits.push({ blockId, entity });
         found.add(entity);
       }

@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { scanDocument, type ConsistencyFinding, type ConsistencyScan } from "@/lib/consistency";
+import { groupHitsByBlock, MAX_CANDIDATES, scanDocument, type ConsistencyFinding, type ConsistencyScan } from "@/lib/consistency";
+import { MAX_BLOCK_CHARS } from "@/lib/limits";
 import { currentText, editedBlockIds, lastUndoableEvent, loadEvents, saveEvents } from "@/lib/editLog";
 import { sha256Hex } from "@/lib/hash";
 import { cacheParse, getCachedParse } from "@/lib/parseCache";
@@ -17,8 +18,13 @@ import { UploadScreen, type UploadError } from "./UploadScreen";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
-function sectionTitleFor(doc: ParsedDoc, blockId: string): string | null {
-  return doc.sections.find((section) => section.blockIds.includes(blockId))?.title ?? null;
+// The current heading text, not the parse-time title: consistency follow-ups
+// can edit heading blocks, and every label derived here must say what the
+// document says now.
+function sectionTitleFor(doc: ParsedDoc, events: EditEvent[], blockId: string): string | null {
+  const section = doc.sections.find((s) => s.blockIds.includes(blockId));
+  if (!section || section.title === null) return null;
+  return currentText(doc, events, section.blockIds[0]);
 }
 
 type State =
@@ -178,7 +184,9 @@ export function EditorApp() {
   const [toast, setToast] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [consistency, setConsistency] = useState<ConsistencyUi>(null);
-  const [prefill, setPrefill] = useState<{ blockId: string; instruction: string } | null>(null);
+  // seq forces the edit panel remount when a follow-up targets the block
+  // that is already selected; the block id alone would not change the key.
+  const [prefill, setPrefill] = useState<{ blockId: string; instruction: string; seq: number } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const consistencyAbortRef = useRef<AbortController | null>(null);
 
@@ -320,13 +328,16 @@ export function EditorApp() {
         return;
       }
       setConsistency({ scan, status: "checking", findings: [] });
-      const byBlock = new Map<string, string[]>();
-      for (const hit of scan.hits) {
-        byBlock.set(hit.blockId, [...(byBlock.get(hit.blockId) ?? []), hit.entity]);
-      }
-      const candidates = [...byBlock.entries()]
-        .slice(0, 5)
-        .map(([blockId, entities]) => ({ blockId, text: texts[blockId], entities }));
+      // Truncated to the route's cap: a parsed block can exceed what an
+      // editable block ever could, and one oversized candidate must not
+      // reject the whole request.
+      const candidates = [...groupHitsByBlock(scan.hits).entries()]
+        .slice(0, MAX_CANDIDATES)
+        .map(([blockId, entities]) => ({
+          blockId,
+          text: texts[blockId].slice(0, MAX_BLOCK_CHARS),
+          entities,
+        }));
       const controller = new AbortController();
       consistencyAbortRef.current = controller;
       try {
@@ -343,6 +354,9 @@ export function EditorApp() {
         });
         if (!res.ok) throw new Error(String(res.status));
         const { findings } = (await res.json()) as { findings: ConsistencyFinding[] };
+        // A dismissed or superseded check must not write over the current
+        // card; the catch path has the same guard.
+        if (controller.signal.aborted) return;
         setConsistency({ scan, status: "judged", findings });
       } catch {
         // The judge is advisory; losing it degrades to the lexical hits.
@@ -407,12 +421,12 @@ export function EditorApp() {
         <aside className="flex w-96 shrink-0 flex-col overflow-y-auto border-l border-edge p-6">
           {selectedBlockId && selectedText !== null ? (
             <EditPanel
-              key={selectedBlockId}
+              key={prefill?.blockId === selectedBlockId ? `${selectedBlockId}:${prefill.seq}` : selectedBlockId}
               blockText={selectedText}
               edit={edit}
               initialInstruction={prefill?.blockId === selectedBlockId ? prefill.instruction : undefined}
               onPropose={(instruction) =>
-                proposeEdit(selectedBlockId, selectedText, instruction, sectionTitleFor(doc, selectedBlockId))
+                proposeEdit(selectedBlockId, selectedText, instruction, sectionTitleFor(doc, events, selectedBlockId))
               }
               onApply={() => {
                 // Mirrors the reducer's stale-apply guard so the check never
@@ -451,12 +465,12 @@ export function EditorApp() {
               status={consistency.status}
               findings={consistency.findings}
               blockLabel={(blockId) =>
-                sectionTitleFor(doc, blockId) ?? `page ${doc.blocks[blockId].page}`
+                sectionTitleFor(doc, events, blockId) ?? `page ${doc.blocks[blockId].page}`
               }
               blockText={(blockId) => currentText(doc, events, blockId)}
               onFollowUp={(blockId, instruction) => {
                 abortInFlight();
-                setPrefill({ blockId, instruction });
+                setPrefill((p) => ({ blockId, instruction, seq: (p?.seq ?? 0) + 1 }));
                 dispatch({ type: "select_block", blockId });
                 // Show the user what they are about to fix; the panel alone
                 // does not reveal where the block sits in the document.

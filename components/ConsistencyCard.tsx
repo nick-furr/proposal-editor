@@ -1,6 +1,6 @@
 "use client";
 
-import type { ConsistencyFinding, ConsistencyScan } from "@/lib/consistency";
+import { groupHitsByBlock, type ConsistencyFinding, type ConsistencyScan } from "@/lib/consistency";
 
 export type ConsistencyStatus = "checking" | "judged" | "unavailable";
 
@@ -26,10 +26,7 @@ export function ConsistencyCard({
   onFollowUp: (blockId: string, instruction: string) => void;
   onDismiss: () => void;
 }) {
-  const byBlock = new Map<string, string[]>();
-  for (const hit of scan.hits) {
-    byBlock.set(hit.blockId, [...(byBlock.get(hit.blockId) ?? []), hit.entity]);
-  }
+  const byBlock = groupHitsByBlock(scan.hits);
   const findingFor = (blockId: string) => findings.find((f) => f.blockId === blockId);
 
   return (
@@ -69,6 +66,11 @@ export function ConsistencyCard({
             {status === "checking" && <p className="animate-pulse text-muted">Checking</p>}
             {status === "unavailable" && (
               <p className="text-muted">Model check unavailable; text match only.</p>
+            )}
+            {/* Hit blocks past the candidate cap are never judged; say so
+                instead of rendering a row that looks hung. */}
+            {status === "judged" && !finding && (
+              <p className="text-muted">Text match only, past the judged-block limit.</p>
             )}
             {finding && !finding.stale && <p className="text-muted">Reads as consistent.</p>}
             {finding?.stale && (

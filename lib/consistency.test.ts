@@ -93,10 +93,14 @@ describe("parseFindings", () => {
     expect(parseFindings(raw, ids)).toEqual([{ blockId: "b2", stale: false }]);
   });
 
-  it("rejects prose, non-arrays, unknown block ids, and missing verdicts", () => {
+  it("rejects prose, non-arrays, and missing verdicts", () => {
     expect(parseFindings("I could not find issues.", ids)).toBeNull();
     expect(parseFindings('{"blockId":"b2","stale":true}', ids)).toBeNull();
-    expect(parseFindings('[{"blockId":"b9","stale":true}]', ids)).toBeNull();
     expect(parseFindings('[{"blockId":"b2"}]', ids)).toBeNull();
+  });
+
+  it("skips a stray item for an unknown block without discarding the batch", () => {
+    const raw = '[{"blockId":"b9","stale":true},{"blockId":"b2","stale":false}]';
+    expect(parseFindings(raw, ids)).toEqual([{ blockId: "b2", stale: false }]);
   });
 });

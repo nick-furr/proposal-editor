@@ -62,7 +62,11 @@ export function DocumentView({
           {section.title && (
             <h2
               id={section.blockIds[0]}
-              className="mb-2 text-sm font-semibold tracking-wide text-accent"
+              className={`mb-2 text-sm font-semibold tracking-wide text-accent ${
+                // Follow-ups can select a heading block; without this ring
+                // the selection would be invisible in the document.
+                section.blockIds[0] === selectedBlockId ? "rounded ring-1 ring-accent" : ""
+              }`}
             >
               {/* The heading block's current text, not the parse-time title:
                   consistency follow-ups can edit heading blocks, and the DOCX

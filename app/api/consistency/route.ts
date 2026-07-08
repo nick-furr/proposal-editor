@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ConfigError, getAnthropic } from "@/lib/anthropic";
-import { parseFindings } from "@/lib/consistency";
+import { MAX_CANDIDATES, parseFindings } from "@/lib/consistency";
 import { MAX_BLOCK_CHARS, MAX_INSTRUCTION_CHARS } from "@/lib/limits";
 
 export const runtime = "nodejs";
@@ -21,8 +21,6 @@ const SYSTEM_PROMPT = [
 ].join("\n");
 
 type Candidate = { blockId: string; text: string; entities: string[] };
-
-const MAX_CANDIDATES = 5;
 
 function validCandidate(c: unknown): c is Candidate {
   if (typeof c !== "object" || c === null) return false;
