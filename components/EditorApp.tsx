@@ -50,7 +50,9 @@ type Action =
   | { type: "proposal_done" }
   | { type: "edit_failed"; code: string }
   | { type: "edit_dismissed" }
-  | { type: "apply_proposal" }
+  // The id is minted at the call site so the consistency card can key its
+  // source apply by identity instead of comparing event content.
+  | { type: "apply_proposal"; eventId: string }
   | { type: "undo"; targetEventId: string }
   | { type: "clear_history" };
 
@@ -142,7 +144,7 @@ function reducer(state: State, action: Action): State {
         return { ...state, edit: { ...edit, status: "error", code: "stale" } };
       }
       const event: EditEvent = {
-        id: crypto.randomUUID(),
+        id: action.eventId,
         type: "apply",
         blockId: edit.blockId,
         sectionTitle: edit.sectionTitle,
@@ -173,13 +175,22 @@ function reducer(state: State, action: Action): State {
   }
 }
 
+// The apply a card reports on. The eventId keys the card to its apply by
+// identity; the payload stays because revalidation excludes the source
+// block and a judge refresh resends the original edit.
+type ConsistencySource = {
+  eventId: string;
+  blockId: string;
+  before: string;
+  after: string;
+  instruction: string;
+};
+
 type ConsistencyUi = {
   scan: ConsistencyScan;
   status: ConsistencyStatus;
   findings: ConsistencyFinding[];
-  // The apply this card reports on. Undoing that apply invalidates every
-  // finding, so it clears the card; undoing any other apply keeps it.
-  source: { blockId: string; before: string; after: string };
+  source: ConsistencySource;
 } | null;
 
 export function EditorApp() {
@@ -308,32 +319,19 @@ export function EditorApp() {
     setConsistency(null);
   }, []);
 
-  const runConsistencyCheck = useCallback(
-    async (
-      doc: ParsedDoc,
-      events: EditEvent[],
-      applied: { blockId: string; before: string; after: string; instruction: string },
-    ) => {
-      // Other blocks are unaffected by this apply, so pre-apply events fold
-      // to the correct current text for every candidate.
-      const texts: Record<string, string> = {};
-      for (const id of Object.keys(doc.blocks)) {
-        if (id !== applied.blockId) texts[id] = currentText(doc, events, id);
-      }
-      const scan = scanDocument(applied.before, applied.after, applied.blockId, texts);
-      if (scan.hits.length === 0 && scan.departed.length === 0) {
-        // Nothing to report leaves the previous card and any in-flight judge
-        // call alone: a tone edit between follow-ups must not destroy
-        // pending findings. An apply that touches a flagged entity
-        // regenerates the card through its own scan.
-        return;
-      }
+  // Publish a card for this scan, sending the hit blocks to the judge when
+  // there are any. Owns the abort handoff: entering here supersedes
+  // whatever judge call was in flight.
+  const judgeScan = useCallback(
+    async (scan: ConsistencyScan, source: ConsistencySource, texts: Record<string, string>) => {
       consistencyAbortRef.current?.abort();
+      const publish = (status: ConsistencyStatus, findings: ConsistencyFinding[]) =>
+        setConsistency({ scan, status, findings, source });
       if (scan.hits.length === 0) {
-        setConsistency({ scan, status: "judged", findings: [], source: applied });
+        publish("judged", []);
         return;
       }
-      setConsistency({ scan, status: "checking", findings: [], source: applied });
+      publish("checking", []);
       // Truncated to the route's cap: a parsed block can exceed what an
       // editable block ever could, and one oversized candidate must not
       // reject the whole request.
@@ -352,9 +350,9 @@ export function EditorApp() {
           headers: { "content-type": "application/json" },
           signal: controller.signal,
           body: JSON.stringify({
-            instruction: applied.instruction,
-            before: applied.before,
-            after: applied.after,
+            instruction: source.instruction,
+            before: source.before,
+            after: source.after,
             candidates,
           }),
         });
@@ -363,14 +361,36 @@ export function EditorApp() {
         // A dismissed or superseded check must not write over the current
         // card; the catch path has the same guard.
         if (controller.signal.aborted) return;
-        setConsistency({ scan, status: "judged", findings, source: applied });
+        publish("judged", findings);
       } catch {
         // The judge is advisory; losing it degrades to the lexical hits.
         if (controller.signal.aborted) return;
-        setConsistency({ scan, status: "unavailable", findings: [], source: applied });
+        publish("unavailable", []);
       }
     },
     [],
+  );
+
+  const runConsistencyCheck = useCallback(
+    (doc: ParsedDoc, events: EditEvent[], applied: ConsistencySource) => {
+      // Other blocks are unaffected by this apply, so pre-apply events fold
+      // to the correct current text; the applied block's entry is its new
+      // text so revalidation sees the document as it now stands.
+      const texts: Record<string, string> = {};
+      for (const id of Object.keys(doc.blocks)) {
+        texts[id] = id === applied.blockId ? applied.after : currentText(doc, events, id);
+      }
+      const scan = scanDocument(applied.before, applied.after, applied.blockId, texts);
+      if (scan.hits.length === 0 && scan.departed.length === 0) {
+        // Nothing to report leaves the previous card and any in-flight judge
+        // call alone: a tone edit between follow-ups must not destroy
+        // pending findings. An apply that touches a flagged entity
+        // regenerates the card through its own scan.
+        return;
+      }
+      void judgeScan(scan, applied, texts);
+    },
+    [judgeScan],
   );
 
   if (state.phase !== "ready") {
@@ -440,10 +460,12 @@ export function EditorApp() {
                 const willApply =
                   edit?.status === "proposed" &&
                   edit.baseText === currentText(doc, events, edit.blockId);
-                dispatch({ type: "apply_proposal" });
+                const eventId = crypto.randomUUID();
+                dispatch({ type: "apply_proposal", eventId });
                 if (willApply && edit.status === "proposed") {
                   setToast(`Edit applied, ${edit.sectionTitle ?? "untitled section"}`);
-                  void runConsistencyCheck(doc, events, {
+                  runConsistencyCheck(doc, events, {
+                    eventId,
                     blockId: edit.blockId,
                     before: edit.baseText,
                     after: edit.proposal,
@@ -515,14 +537,7 @@ export function EditorApp() {
               onUndo={(targetEventId) => {
                 // Only undoing the card's own source apply invalidates its
                 // findings; undoing an unrelated edit keeps the triage list.
-                const undone = events.find((e) => e.id === targetEventId);
-                if (
-                  consistency &&
-                  undone?.type === "apply" &&
-                  undone.blockId === consistency.source.blockId &&
-                  undone.before === consistency.source.before &&
-                  undone.after === consistency.source.after
-                ) {
+                if (targetEventId === consistency?.source.eventId) {
                   clearConsistency();
                 }
                 dispatch({ type: "undo", targetEventId });
