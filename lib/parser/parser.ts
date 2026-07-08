@@ -3,7 +3,7 @@ import type { Block, ParsedDoc, RawItem, Section } from "../types";
 // Every rule below exists because a measurement of the fixture corpus demanded
 // it (see SPEC.md, corpus diagnostics round 2). Bump when output shape or rules
 // change so the parse cache never serves stale structure.
-export const PARSER_VERSION = 2;
+export const PARSER_VERSION = 3;
 
 // Items within this vertical distance belong to one visual line.
 const LINE_Y_TOL = 3;
@@ -23,6 +23,17 @@ const FURNITURE_Y_BAND = 6;
 // the primary signal and a font-size jump is only the hidden-fixture fallback.
 const HEADING_MAX_CHARS = 60;
 const HEADING_SIZE_JUMP = 1.2;
+// Column channel detection, thresholds measured on both layout fixtures
+// (context/diagnostics/columns-diag.ts): real channels are 10pt+ wide with
+// content mass on both sides and only title lines crossing. A letterhead
+// pair is one row, so a channel also needs vertical extent.
+const COLUMN_STEP = 2;
+const COLUMN_MIN_WIDTH = 10;
+const COLUMN_MAX_CROSS = 0.15;
+const COLUMN_MIN_SIDE = 0.15;
+const COLUMN_MIN_ROWS = 8;
+const COLUMN_ROW_BAND = 4;
+const COLUMN_EDGE_TOL = 2;
 
 export type Line = { y: number; size: number; spans: string[] };
 
@@ -86,6 +97,72 @@ export function buildLines(items: RawItem[]): Line[] {
     });
   }
   return lines;
+}
+
+// A vertical whitespace channel with content on both sides means a
+// two-column page (the resume/sidebar layout class). Detected on raw item
+// geometry, before line assembly fuses the columns.
+export function findChannel(items: RawItem[]): { x0: number; x1: number } | null {
+  const rowOf = (it: RawItem) => Math.round(it.y / COLUMN_ROW_BAND);
+  const rows = new Set(items.map(rowOf));
+  if (rows.size < COLUMN_MIN_ROWS) return null;
+  const minX = Math.ceil(Math.min(...items.map((it) => it.x)));
+  const maxX = Math.max(...items.map((it) => it.x + it.w));
+  const maxCross = rows.size * COLUMN_MAX_CROSS;
+
+  let best: { x0: number; x1: number } | null = null;
+  let start: number | null = null;
+  for (let x = minX; x <= maxX + COLUMN_STEP; x += COLUMN_STEP) {
+    const cross = new Set(items.filter((it) => it.x < x && x < it.x + it.w).map(rowOf)).size;
+    if (x <= maxX && cross <= maxCross) {
+      start = start ?? x;
+      continue;
+    }
+    if (start !== null && x - start >= COLUMN_MIN_WIDTH) {
+      const x1 = x - COLUMN_STEP;
+      const left = items.filter((it) => it.x + it.w <= start + COLUMN_EDGE_TOL).length;
+      const right = items.filter((it) => it.x >= x1 - COLUMN_EDGE_TOL).length;
+      const minority = Math.min(left, right) / items.length;
+      if (minority >= COLUMN_MIN_SIDE && (!best || x1 - start > best.x1 - best.x0)) {
+        best = { x0: start, x1 };
+      }
+    }
+    start = null;
+  }
+  return best;
+}
+
+// A page is a list of segments, each block-grouped independently. Ordinary
+// pages are one segment. A column page becomes bands: each full-width line
+// is a divider segment, and between dividers the left column reads before
+// the right, so sidebar text never interleaves into body prose.
+export function segmentPage(items: RawItem[]): Line[][] {
+  const usable = items.filter((it) => it.str.trim().length > 0);
+  const channel = findChannel(usable);
+  if (!channel) return [buildLines(usable)];
+
+  const left: RawItem[] = [];
+  const right: RawItem[] = [];
+  const crossing: RawItem[] = [];
+  for (const it of usable) {
+    if (it.x + it.w <= channel.x0 + COLUMN_EDGE_TOL) left.push(it);
+    else if (it.x >= channel.x1 - COLUMN_EDGE_TOL) right.push(it);
+    else crossing.push(it);
+  }
+  const dividers = buildLines(crossing);
+  const leftLines = buildLines(left);
+  const rightLines = buildLines(right);
+
+  const segments: Line[][] = [];
+  for (let k = -1; k < dividers.length; k++) {
+    if (k >= 0) segments.push([dividers[k]]);
+    const top = k === -1 ? Infinity : dividers[k].y;
+    const bottom = k + 1 < dividers.length ? dividers[k + 1].y : -Infinity;
+    const inBand = (line: Line) => line.y <= top && line.y > bottom;
+    segments.push(leftLines.filter(inBand));
+    segments.push(rightLines.filter(inBand));
+  }
+  return segments.filter((segment) => segment.length > 0);
 }
 
 function lineKey(line: Line): string {
@@ -157,7 +234,8 @@ export function parsePages(
   pages: RawItem[][],
   meta: { fileHash: string; fileName: string },
 ): ParsedDoc {
-  const pageLines = pages.map(buildLines);
+  const pageSegments = pages.map(segmentPage);
+  const pageLines = pageSegments.map((segments) => segments.flat());
   const furniture = furnitureKeys(pageLines);
   const bodySize = median(pageLines.flat().map((line) => line.size)) || 12;
 
@@ -190,23 +268,28 @@ export function parsePages(
     lastPage = page;
   };
 
-  pageLines.forEach((lines, pageIndex) => {
-    const kept = lines.filter((line) => !furniture.has(lineKey(line)));
-    for (const group of groupBlocks(kept)) {
-      // Split the block into runs of heading and body lines so a heading
-      // sitting tight above its paragraph still becomes its own block.
-      let run: Line[] = [];
-      let runIsHeading = false;
-      for (const line of group) {
-        const heading = isHeadingLine(line, bodySize);
-        if (run.length > 0 && heading !== runIsHeading) {
-          emit(run, runIsHeading ? "heading" : "paragraph", pageIndex + 1);
-          run = [];
+  pageSegments.forEach((segments, pageIndex) => {
+    for (const segment of segments) {
+      // A segment boundary is a column or band switch; a display title never
+      // continues across one.
+      lastKind = null;
+      const kept = segment.filter((line) => !furniture.has(lineKey(line)));
+      for (const group of groupBlocks(kept)) {
+        // Split the block into runs of heading and body lines so a heading
+        // sitting tight above its paragraph still becomes its own block.
+        let run: Line[] = [];
+        let runIsHeading = false;
+        for (const line of group) {
+          const heading = isHeadingLine(line, bodySize);
+          if (run.length > 0 && heading !== runIsHeading) {
+            emit(run, runIsHeading ? "heading" : "paragraph", pageIndex + 1);
+            run = [];
+          }
+          run.push(line);
+          runIsHeading = heading;
         }
-        run.push(line);
-        runIsHeading = heading;
+        if (run.length > 0) emit(run, runIsHeading ? "heading" : "paragraph", pageIndex + 1);
       }
-      if (run.length > 0) emit(run, runIsHeading ? "heading" : "paragraph", pageIndex + 1);
     }
   });
 

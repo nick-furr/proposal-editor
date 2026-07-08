@@ -221,6 +221,68 @@ describe("block grouping", () => {
   });
 });
 
+describe("column routing", () => {
+  // Shapes match the measured resume pages: a narrow left sidebar, a wide
+  // right body column, and a persistent whitespace channel between them.
+  const sidebar = (str: string, y: number) => item(str, 60, y, 12, 80);
+  const body = (str: string, y: number) => item(str, 260, y, 12, 240);
+
+  it("routes a two-column page as left column then right column", () => {
+    const page = [
+      sidebar("office location", 700),
+      sidebar("northern branch", 686),
+      sidebar("years of practice", 672),
+      body("The engineer manages daily operations across", 700),
+      body("the firm and oversees work in progress on", 686),
+      body("projects of every size in the region, while", 672),
+      body("coordinating funding and regulatory agencies", 658),
+      body("to keep approvals moving through review and", 644),
+      body("maximize the grant dollars available to the", 630),
+      body("client, with modeling platforms built for the", 616),
+      body("firm's own engineering applications in house.", 602),
+    ];
+    const texts = allText([page]);
+    expect(texts).toHaveLength(2);
+    expect(texts[0]).toBe("office location northern branch years of practice");
+    expect(texts[1]).toBe(
+      "The engineer manages daily operations across the firm and oversees work in progress on projects of every size in the region, while coordinating funding and regulatory agencies to keep approvals moving through review and maximize the grant dollars available to the client, with modeling platforms built for the firm's own engineering applications in house.",
+    );
+  });
+
+  it("treats a full-width line as a band divider above the columns", () => {
+    const page = [
+      item("A TITLE THAT SPANS THE WHOLE PAGE WIDTH", 60, 740, 12, 440),
+      sidebar("left notes here", 700),
+      sidebar("more left notes", 686),
+      body("Right column prose fills the wide side and", 700),
+      body("continues for several lines of real text to", 686),
+      body("anchor the row count above the threshold.", 672),
+      body("It keeps going so the channel has extent.", 658),
+      body("One more line for good measure below that,", 644),
+      body("and another so the vertical extent guard is", 630),
+      body("satisfied the way real column pages are.", 616),
+    ];
+    const doc = parsePages([page], meta);
+    const texts = Object.values(doc.blocks).map((b) => b.text);
+    expect(texts[0]).toBe("A TITLE THAT SPANS THE WHOLE PAGE WIDTH");
+    expect(texts[1]).toBe("left notes here more left notes");
+    expect(texts[2]).toContain("Right column prose");
+    expect(texts.some((t) => t.includes("left notes here") && t.includes("prose"))).toBe(false);
+  });
+
+  it("does not column-split a page that is only a left/right aligned pair", () => {
+    // The letterhead shape: one address line left, one date right. A channel
+    // needs vertical extent; a single row is a span pair, not columns.
+    const page = [
+      item("400 Oak Street, Suite 2", 60, 720, 10, 110),
+      item("July 3, 2025", 480, 720, 10, 60),
+    ];
+    const doc = parsePages([page], meta);
+    const texts = Object.values(doc.blocks).map((b) => b.text);
+    expect(texts).toEqual(["400 Oak Street, Suite 2\nJuly 3, 2025"]);
+  });
+});
+
 describe("empty and degenerate input", () => {
   it("returns zero blocks for pages with no usable text", () => {
     const doc = parsePages([[item("   ", 60, 500)], []], meta);
