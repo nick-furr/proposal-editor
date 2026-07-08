@@ -1,0 +1,107 @@
+import { diffWords } from "diff";
+
+// The deterministic tier of the post-edit consistency pass: the eval's
+// name-fidelity primitive (does this text still contain that entity) pointed
+// at the live document. Lexical recall here, model precision in the judge
+// route; over-flagging is acceptable, silent misses are not.
+
+export type ConsistencyHit = { blockId: string; entity: string };
+
+export type ConsistencyScan = {
+  // Blocks outside the edit that still mention a removed entity.
+  hits: ConsistencyHit[];
+  // Name-like entities the edit removed that now appear nowhere at all.
+  departed: string[];
+};
+
+// The judge route's verdict for one candidate block.
+export type ConsistencyFinding = {
+  blockId: string;
+  stale: boolean;
+  reason?: string;
+  followUp?: string;
+};
+
+// Sentence openers pass the capitalization test without naming anything.
+const OPENERS = new Set([
+  "The", "A", "An", "This", "That", "These", "Those", "We", "Our", "It",
+  "In", "On", "At", "For", "With", "As", "To", "And", "But", "Or", "If",
+  "When", "While", "Since", "After", "Before", "Both", "Each", "All",
+]);
+
+const isEntityToken = (t: string) => /\d/.test(t) || /^[A-Z]/.test(t);
+
+const trimPunct = (t: string) => t.replace(/^[("'[]+/, "").replace(/[.,;:!?)"'\]]+$/, "");
+
+// Maximal runs of capitalized or numeric tokens, minus lone sentence openers.
+// Trailing sentence punctuation closes a run, so "Dana Whitfield, President;"
+// yields two entities, not one welded name-and-title.
+function entityRuns(text: string): string[] {
+  const runs: string[] = [];
+  let run: string[] = [];
+  const close = () => {
+    if (run.length > 0) runs.push(run.join(" "));
+    run = [];
+  };
+  for (const raw of text.split(/\s+/)) {
+    const token = trimPunct(raw);
+    if (token && isEntityToken(token)) {
+      run.push(token);
+      if (/[.,;:!?]["')\]]*$/.test(raw)) close();
+    } else {
+      close();
+    }
+  }
+  close();
+  return runs.filter((r) => !OPENERS.has(r));
+}
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export function containsEntity(text: string, entity: string): boolean {
+  return new RegExp(`(^|\\W)${escapeRegExp(entity)}(\\W|$)`).test(text);
+}
+
+// Guards against a pathological diff flooding the judge call.
+const MAX_ENTITIES = 8;
+
+function removedEntities(before: string, after: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of diffWords(before, after)) {
+    if (!part.removed) continue;
+    for (const entity of entityRuns(part.value)) {
+      // Still present in the rewritten block means moved, not removed.
+      if (!seen.has(entity) && !containsEntity(after, entity)) {
+        seen.add(entity);
+        out.push(entity);
+      }
+    }
+  }
+  return out.slice(0, MAX_ENTITIES);
+}
+
+export function scanDocument(
+  before: string,
+  after: string,
+  editedBlockId: string,
+  blockTexts: Record<string, string>,
+): ConsistencyScan {
+  const entities = removedEntities(before, after);
+  const hits: ConsistencyHit[] = [];
+  const found = new Set<string>();
+  for (const [blockId, text] of Object.entries(blockTexts)) {
+    if (blockId === editedBlockId) continue;
+    for (const entity of entities) {
+      if (containsEntity(text, entity)) {
+        hits.push({ blockId, entity });
+        found.add(entity);
+      }
+    }
+  }
+  // Departed keeps multi-word entities only. A lone "55" or "President"
+  // leaving the document is noise; a full name leaving is the
+  // officer-removal case and the point of the check.
+  const departed = entities.filter((e) => !found.has(e) && e.includes(" "));
+  return { hits, departed };
+}
