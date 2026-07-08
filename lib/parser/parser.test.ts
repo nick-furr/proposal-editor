@@ -297,6 +297,36 @@ describe("column routing", () => {
     expect(texts[1]).toContain("The engineer manages daily operations");
   });
 
+  it.fails("keeps full-width prose above the columned region as one block", () => {
+    // KNOWN LIMIT of single-channel routing, kept as an expected failure.
+    // The registration page's columns exist only in its lower region, and a
+    // sentence wrapping across full-width lines above them splits at the
+    // straddle boundary. A y-extent refinement was attempted and reverted:
+    // that page is really a three-column table region, and row-level extent
+    // detection made it worse. The right fix is region-scoped channels,
+    // which is v3 work on top of this v2 branch.
+    const page = [
+      item("The firm is a corporation with principals, owners,", 60, 760, 12, 420),
+      item("a board of directors and officers.", 60, 746, 12, 180),
+      sidebar("office location", 700),
+      sidebar("northern branch", 686),
+      sidebar("years of practice", 672),
+      body("The engineer manages daily operations across", 700),
+      body("the firm and oversees work in progress on", 686),
+      body("projects of every size in the region, while", 672),
+      body("coordinating funding and regulatory agencies", 658),
+      body("to keep approvals moving through review and", 644),
+      body("maximize the grant dollars available to the", 630),
+      body("client, with modeling platforms built for the", 616),
+      body("firm's own engineering applications in house.", 602),
+    ];
+    const texts = allText([page]);
+    expect(texts[0]).toBe(
+      "The firm is a corporation with principals, owners, a board of directors and officers.",
+    );
+    expect(texts).toHaveLength(3);
+  });
+
   it("does not column-split a page that is only a left/right aligned pair", () => {
     // The letterhead shape: one address line left, one date right. A channel
     // needs vertical extent; a single row is a span pair, not columns.
