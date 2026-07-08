@@ -177,6 +177,9 @@ type ConsistencyUi = {
   scan: ConsistencyScan;
   status: ConsistencyStatus;
   findings: ConsistencyFinding[];
+  // The apply this card reports on. Undoing that apply invalidates every
+  // finding, so it clears the card; undoing any other apply keeps it.
+  source: { blockId: string; before: string; after: string };
 } | null;
 
 export function EditorApp() {
@@ -327,10 +330,10 @@ export function EditorApp() {
       }
       consistencyAbortRef.current?.abort();
       if (scan.hits.length === 0) {
-        setConsistency({ scan, status: "judged", findings: [] });
+        setConsistency({ scan, status: "judged", findings: [], source: applied });
         return;
       }
-      setConsistency({ scan, status: "checking", findings: [] });
+      setConsistency({ scan, status: "checking", findings: [], source: applied });
       // Truncated to the route's cap: a parsed block can exceed what an
       // editable block ever could, and one oversized candidate must not
       // reject the whole request.
@@ -360,11 +363,11 @@ export function EditorApp() {
         // A dismissed or superseded check must not write over the current
         // card; the catch path has the same guard.
         if (controller.signal.aborted) return;
-        setConsistency({ scan, status: "judged", findings });
+        setConsistency({ scan, status: "judged", findings, source: applied });
       } catch {
         // The judge is advisory; losing it degrades to the lexical hits.
         if (controller.signal.aborted) return;
-        setConsistency({ scan, status: "unavailable", findings: [] });
+        setConsistency({ scan, status: "unavailable", findings: [], source: applied });
       }
     },
     [],
@@ -510,8 +513,18 @@ export function EditorApp() {
             <HistorySidebar
               events={events}
               onUndo={(targetEventId) => {
-                // Undoing invalidates the card's premise; drop it.
-                clearConsistency();
+                // Only undoing the card's own source apply invalidates its
+                // findings; undoing an unrelated edit keeps the triage list.
+                const undone = events.find((e) => e.id === targetEventId);
+                if (
+                  consistency &&
+                  undone?.type === "apply" &&
+                  undone.blockId === consistency.source.blockId &&
+                  undone.before === consistency.source.before &&
+                  undone.after === consistency.source.after
+                ) {
+                  clearConsistency();
+                }
                 dispatch({ type: "undo", targetEventId });
               }}
             />
