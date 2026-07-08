@@ -259,6 +259,33 @@ describe("font-run subheadings", () => {
     expect(headings.some((h) => h.includes("office location"))).toBe(false);
   });
 
+  it("does not turn a paragraph's first line into a heading when its own font continues lowercase", () => {
+    // Measured on the resume whose project list outweighs its bio: the bio
+    // font flips to minority and each paragraph's first line passes the
+    // label test. The wrapped-paragraph signature is a tight same-font
+    // continuation starting lowercase; a real label is never followed by one.
+    const page = [
+      sideItem("office location", 700),
+      sideItem("northern branch", 686),
+      sideItem("years of practice", 672),
+      bodyAt("Mr. Hale is a management professional with", 700, "f-bio", 210),
+      bodyAt("twenty years of operations experience across", 686, "f-bio"),
+      bodyAt("Project Manager: Ridgeline Quarry Expansion", 672, "f-list", 200),
+      bodyAt("Managed all site activities including permitting", 658, "f-list"),
+      bodyAt("and community relations for the expansion, with", 644, "f-list"),
+      bodyAt("production scheduling for eight roller mills and", 630, "f-list"),
+      bodyAt("coordination with maintenance during repairs on", 616, "f-list"),
+      bodyAt("a compressed outage calendar every quarter, and", 602, "f-list"),
+      bodyAt("supervisor compliance training for the crews of", 588, "f-list"),
+      bodyAt("both facilities through the end of the program.", 574, "f-list"),
+    ];
+    const doc = parsePages([page], meta);
+    const headings = Object.values(doc.blocks)
+      .filter((b) => b.kind === "heading")
+      .map((b) => b.text);
+    expect(headings.some((h) => h.startsWith("Mr. Hale"))).toBe(false);
+  });
+
   it("leaves single-column pages alone even with minority fonts", () => {
     // Cover pages and letters are full of display fonts; the rule must not
     // touch them.

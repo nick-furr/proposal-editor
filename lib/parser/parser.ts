@@ -3,7 +3,7 @@ import type { Block, ParsedDoc, RawItem, Section } from "../types";
 // Every rule below exists because a measurement of the fixture corpus demanded
 // it (see SPEC.md, corpus diagnostics round 2). Bump when output shape or rules
 // change so the parse cache never serves stale structure.
-export const PARSER_VERSION = 6;
+export const PARSER_VERSION = 7;
 
 // Items within this vertical distance belong to one visual line.
 const LINE_Y_TOL = 3;
@@ -369,8 +369,19 @@ export function parsePages(
         // sitting tight above its paragraph still becomes its own block.
         let run: Line[] = [];
         let runIsHeading = false;
-        for (const line of group) {
-          const heading = isHeadingLine(line, bodySize, minorityFonts);
+        for (let i = 0; i < group.length; i++) {
+          const line = group[i];
+          let heading = isHeadingLine(line, bodySize, minorityFonts);
+          if (heading && !isHeadingLine(line, bodySize)) {
+            // Font-rule candidates only: a tight same-font continuation
+            // starting lowercase is a wrapped paragraph's first line, not a
+            // label. Real labels are never followed by one; a two-line label
+            // continues in its own font but starts each line on a capital.
+            const next = group[i + 1];
+            if (next && next.font === line.font && /^[a-z]/.test(next.spans.join(" "))) {
+              heading = false;
+            }
+          }
           // A font change between adjacent heading lines is a section head
           // meeting a subhead, not a wrapped title: separate headings.
           const fontBreak =
