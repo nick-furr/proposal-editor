@@ -1,8 +1,8 @@
 import { diffWords } from "diff";
 import type { CaseScore, Check, EvalExpectation } from "./types";
 
-// Every check is deterministic string comparison. An LLM judge would mirror
-// Buoyant's Review product but adds spend and a second model's judgment to
+// Every check is deterministic string comparison. An LLM judge could grade
+// semantic equivalence but adds spend and a second model's judgment to
 // defend; exact checks are the stronger artifact under code review.
 
 export function isRefusal(output: string): boolean {
