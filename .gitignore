@@ -27,3 +27,6 @@ npm-debug.log*
 *.pdf
 
 .env*
+
+# Claude Code worktrees
+.claude/
