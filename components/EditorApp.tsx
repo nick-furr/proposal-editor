@@ -311,7 +311,6 @@ export function EditorApp() {
       events: EditEvent[],
       applied: { blockId: string; before: string; after: string; instruction: string },
     ) => {
-      consistencyAbortRef.current?.abort();
       // Other blocks are unaffected by this apply, so pre-apply events fold
       // to the correct current text for every candidate.
       const texts: Record<string, string> = {};
@@ -320,9 +319,13 @@ export function EditorApp() {
       }
       const scan = scanDocument(applied.before, applied.after, applied.blockId, texts);
       if (scan.hits.length === 0 && scan.departed.length === 0) {
-        setConsistency(null);
+        // Nothing to report leaves the previous card and any in-flight judge
+        // call alone: a tone edit between follow-ups must not destroy
+        // pending findings. An apply that touches a flagged entity
+        // regenerates the card through its own scan.
         return;
       }
+      consistencyAbortRef.current?.abort();
       if (scan.hits.length === 0) {
         setConsistency({ scan, status: "judged", findings: [] });
         return;
