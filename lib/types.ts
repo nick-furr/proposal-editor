@@ -6,6 +6,9 @@ export type RawItem = {
   y: number;
   size: number;
   w: number;
+  // pdf.js font identifier. Opaque per document, but font runs are the only
+  // signal separating bold subheadings from body prose in this corpus.
+  font?: string;
 };
 
 export type Block = {

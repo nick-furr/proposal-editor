@@ -53,6 +53,7 @@ export async function extractPages(buffer: ArrayBuffer): Promise<ExtractResult> 
           y: item.transform[5],
           size: Math.abs(item.transform[3]),
           w: item.width,
+          font: item.fontName,
         });
       }
       itemCount += items.length;

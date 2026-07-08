@@ -6,8 +6,15 @@ import { buildLines, groupBlocks, parsePages } from "./parser";
 // fixture corpus (see SPEC.md, corpus diagnostics round 2). No fixture text
 // appears here; the fixtures are real client documents and stay gitignored.
 
-function item(str: string, x: number, y: number, size = 12, w = str.length * 5): RawItem {
-  return { str, x, y, size, w };
+function item(
+  str: string,
+  x: number,
+  y: number,
+  size = 12,
+  w = str.length * 5,
+  font = "",
+): RawItem {
+  return { str, x, y, size, w, font };
 }
 
 const meta = { fileHash: "test", fileName: "test.pdf" };
@@ -218,6 +225,71 @@ describe("block grouping", () => {
     const blocks = groupBlocks(lines);
     expect(blocks).toHaveLength(2);
     expect(blocks[0]).toHaveLength(2);
+  });
+});
+
+describe("font-run subheadings", () => {
+  // The resume project labels are body-size mixed case; the font run is the
+  // only signal, and it is scoped to prose-dominated column streams because
+  // document-wide it shatters cover typography into sections.
+  const sideItem = (str: string, y: number) => item(str, 60, y, 12, 80, "f-side");
+  const bodyAt = (str: string, y: number, font: string, w = 230) => item(str, 260, y, 12, w, font);
+
+  it("peels bold-only labels out of a resume body column", () => {
+    const page = [
+      sideItem("office location", 700),
+      sideItem("northern branch", 686),
+      sideItem("years of practice", 672),
+      bodyAt("Project Manager: City of Rivertown, IL", 700, "f-bold", 190),
+      bodyAt("Design of the water system improvements and", 686, "f-body"),
+      bodyAt("construction phase services for the district.", 672, "f-body"),
+      bodyAt("Engineer: Lakeside Water Commission", 658, "f-bold", 180),
+      bodyAt("Supply, treatment, and distribution improvements.", 644, "f-body"),
+      bodyAt("The district retained the firm for construction", 630, "f-body"),
+      bodyAt("phase services and resident inspection through", 616, "f-body"),
+      bodyAt("final completion of the improvements program.", 602, "f-body"),
+    ];
+    const doc = parsePages([page], meta);
+    const headings = Object.values(doc.blocks)
+      .filter((b) => b.kind === "heading")
+      .map((b) => b.text);
+    expect(headings).toContain("Project Manager: City of Rivertown, IL");
+    expect(headings).toContain("Engineer: Lakeside Water Commission");
+    // The sidebar column keeps its own font without growing sections.
+    expect(headings.some((h) => h.includes("office location"))).toBe(false);
+  });
+
+  it("leaves single-column pages alone even with minority fonts", () => {
+    // Cover pages and letters are full of display fonts; the rule must not
+    // touch them.
+    const page = [
+      item("Dear Mayor Wells and Selection Committee,", 60, 700, 12, 210, "f-salutation"),
+      item("The firm is pleased to present qualifications for", 60, 686, 12, 240, "f-body"),
+      item("professional engineering services to the city.", 60, 672, 12, 230, "f-body"),
+      item("We appreciate the opportunity to be considered.", 60, 658, 12, 235, "f-body"),
+    ];
+    const doc = parsePages([page], meta);
+    expect(Object.values(doc.blocks).every((b) => b.kind === "paragraph")).toBe(true);
+  });
+});
+
+describe("furniture exemption for heading-shaped lines", () => {
+  it("keeps a repeating sidebar label and still drops the footer", () => {
+    // OFFICE LOCATION repeats at the same y-band on three resume pages,
+    // exactly like a footer; heading shape is what separates label from
+    // furniture. The real footer stays dropped.
+    const footer = (y: number) => item("400 Oak St | Rivertown, MO | 555-0100", 200, y, 8);
+    const pages = [
+      [item("OFFICE LOCATION", 60, 700, 12), item("Rivertown, MO", 60, 686), footer(30)],
+      [item("OFFICE LOCATION", 60, 700, 12), item("Lakeside, MO", 60, 686), footer(30)],
+      [item("OFFICE LOCATION", 60, 700, 12), item("Hillcrest, MO", 60, 686), footer(30)],
+    ];
+    const doc = parsePages(pages, meta);
+    const titles = doc.sections.filter((s) => s.title === "OFFICE LOCATION");
+    expect(titles).toHaveLength(3);
+    const texts = Object.values(doc.blocks).map((b) => b.text);
+    expect(texts.join(" ")).not.toContain("555-0100");
+    expect(texts).toContain("Rivertown, MO");
   });
 });
 

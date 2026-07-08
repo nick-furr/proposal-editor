@@ -3,7 +3,7 @@ import type { Block, ParsedDoc, RawItem, Section } from "../types";
 // Every rule below exists because a measurement of the fixture corpus demanded
 // it (see SPEC.md, corpus diagnostics round 2). Bump when output shape or rules
 // change so the parse cache never serves stale structure.
-export const PARSER_VERSION = 4;
+export const PARSER_VERSION = 6;
 
 // Items within this vertical distance belong to one visual line.
 const LINE_Y_TOL = 3;
@@ -23,6 +23,15 @@ const FURNITURE_Y_BAND = 6;
 // the primary signal and a font-size jump is only the hidden-fixture fallback.
 const HEADING_MAX_CHARS = 60;
 const HEADING_SIZE_JUMP = 1.2;
+// Subheadings set in a different font weight at body size ("Funding", the
+// resume project labels) are invisible to caps and size signals. A short
+// line in a MINORITY font of its stream is a heading: measured, the labels
+// are under a fifth of their column's lines, while both sidebar populations
+// (list font, detail font) run 40 percent each and must never explode into
+// sections. Font-run headings may run longer than caps headings: the
+// labels carry client names.
+const HEADING_FONT_MAX_CHARS = 80;
+const HEADING_FONT_MAX_SHARE = 0.25;
 // Column channel detection, thresholds measured on both layout fixtures
 // (context/diagnostics/columns-diag.ts): real channels are 10pt+ wide with
 // content mass on both sides and only title lines crossing. A letterhead
@@ -35,12 +44,29 @@ const COLUMN_MIN_ROWS = 8;
 const COLUMN_ROW_BAND = 4;
 const COLUMN_EDGE_TOL = 2;
 
-export type Line = { y: number; size: number; spans: string[] };
+export type Line = { y: number; size: number; spans: string[]; font: string };
 
 function median(values: number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length / 2)];
+}
+
+// Most frequent value; ties break toward first seen. Used for a line's font
+// (from its items) and a stream's dominant font (from its lines).
+function mode(values: string[]): string {
+  const counts = new Map<string, number>();
+  let best = "";
+  let bestCount = 0;
+  for (const value of values) {
+    const count = (counts.get(value) ?? 0) + 1;
+    counts.set(value, count);
+    if (count > bestCount) {
+      best = value;
+      bestCount = count;
+    }
+  }
+  return best;
 }
 
 // Geometric sort is mandatory: pdf.js emits raw content-stream order (Canva
@@ -94,6 +120,7 @@ export function buildLines(items: RawItem[]): Line[] {
       y: group[0].y,
       size: median(group.map((it) => it.size)),
       spans,
+      font: mode(group.map((it) => it.font ?? "")),
     });
   }
   return lines;
@@ -133,14 +160,16 @@ export function findChannel(items: RawItem[]): { x0: number; x1: number } | null
   return best;
 }
 
+export type Segment = { lines: Line[]; column: boolean };
+
 // A page is a list of segments, each block-grouped independently. Ordinary
-// pages are one segment. A column page becomes bands: each full-width line
-// is a divider segment, and between dividers the left column reads before
-// the right, so sidebar text never interleaves into body prose.
-export function segmentPage(items: RawItem[]): Line[][] {
+// pages are one segment. A column page becomes: full-width lines, then each
+// column whole, so sidebar text never interleaves into body prose. Column
+// streams are marked: font-run subheading detection runs only inside them.
+export function segmentPage(items: RawItem[]): Segment[] {
   const usable = items.filter((it) => it.str.trim().length > 0);
   const channel = findChannel(usable);
-  if (!channel) return [buildLines(usable)];
+  if (!channel) return [{ lines: buildLines(usable), column: false }];
 
   const left: RawItem[] = [];
   const right: RawItem[] = [];
@@ -166,10 +195,11 @@ export function segmentPage(items: RawItem[]): Line[][] {
   // banner right of a photo leads its page even though it is column
   // content, not a divider. Stable sort keeps left before right on ties.
   const columns = [buildLines(left), buildLines(right)]
-    .filter((segment) => segment.length > 0)
-    .sort((a, b) => b[0].y - a[0].y);
-  const segments = [buildLines(crossing), ...columns];
-  return segments.filter((segment) => segment.length > 0);
+    .filter((lines) => lines.length > 0)
+    .sort((a, b) => b[0].y - a[0].y)
+    .map((lines): Segment => ({ lines, column: true }));
+  const segments: Segment[] = [{ lines: buildLines(crossing), column: false }, ...columns];
+  return segments.filter((segment) => segment.lines.length > 0);
 }
 
 function lineKey(line: Line): string {
@@ -223,12 +253,45 @@ export function groupBlocks(lines: Line[]): Line[][] {
 // Heading-ness is a line property: MECO headings sit tight above their body
 // text and would otherwise be swallowed into the paragraph block below them.
 // A multi-span line is a layout row (address left, date right), never a heading.
-export function isHeadingLine(line: Line, bodySize: number): boolean {
+export function isHeadingLine(
+  line: Line,
+  bodySize: number,
+  minorityFonts?: Set<string>,
+): boolean {
   const text = line.spans.join(" ");
-  if (text.length > HEADING_MAX_CHARS || !/[A-Za-z]/.test(text)) return false;
-  if (line.spans.length > 1) return false;
+  if (line.spans.length > 1 || !/[A-Za-z]/.test(text)) return false;
+  if (
+    minorityFonts?.has(line.font) &&
+    text.length <= HEADING_FONT_MAX_CHARS &&
+    line.size <= bodySize * HEADING_SIZE_JUMP &&
+    // Mid-paragraph lines in a variant body font start wherever the wrap
+    // fell ("$1.5 Million...", "(Hwy 106);..."); headings start on a
+    // capital letter.
+    /^[A-Z]/.test(text)
+  ) {
+    return true;
+  }
+  if (text.length > HEADING_MAX_CHARS) return false;
   if (text === text.toUpperCase()) return true;
   return line.size > bodySize * HEADING_SIZE_JUMP;
+}
+
+// Fonts rare within a stream are heading candidates for it, and only in a
+// column stream that is dominated by one prose font. Document-wide the same
+// rule shatters cover typography (every display line is a minority font),
+// so eligibility is scoped to where it was measured: resume-style columns.
+export function minorityFontsOf(segment: Segment): Set<string> | undefined {
+  if (!segment.column) return undefined;
+  const lines = segment.lines;
+  const counts = new Map<string, number>();
+  for (const line of lines) counts.set(line.font, (counts.get(line.font) ?? 0) + 1);
+  const dominantCount = Math.max(...counts.values());
+  if (dominantCount / lines.length < 0.5) return undefined;
+  const minority = new Set<string>();
+  for (const [font, count] of counts) {
+    if (font.length > 0 && count / lines.length <= HEADING_FONT_MAX_SHARE) minority.add(font);
+  }
+  return minority;
 }
 
 // Paragraph lines reflow with spaces; spans split at a wide gap keep their
@@ -242,7 +305,7 @@ export function parsePages(
   meta: { fileHash: string; fileName: string },
 ): ParsedDoc {
   const pageSegments = pages.map(segmentPage);
-  const pageLines = pageSegments.map((segments) => segments.flat());
+  const pageLines = pageSegments.map((segments) => segments.flatMap((segment) => segment.lines));
   const furniture = furnitureKeys(pageLines);
   const bodySize = median(pageLines.flat().map((line) => line.size)) || 12;
 
@@ -251,13 +314,24 @@ export function parsePages(
   let blockCount = 0;
   let lastKind: Block["kind"] | null = null;
   let lastPage = 0;
+  let lastHeadingFont = "";
+  let lastHeadingDisplay = false;
 
   const emit = (lines: Line[], kind: Block["kind"], page: number) => {
     const text = blockText(lines);
     if (text.length === 0) return;
-    if (kind === "heading" && lastKind === "heading" && lastPage === page) {
-      // Oversized display titles arrive one line per block with wide leading
-      // ("Who We" / "Are"); consecutive heading blocks are one heading.
+    const font = mode(lines.map((line) => line.font));
+    const display = median(lines.map((line) => line.size)) > bodySize * HEADING_SIZE_JUMP;
+    if (
+      kind === "heading" &&
+      lastKind === "heading" &&
+      lastPage === page &&
+      // Oversized display titles arrive one line per block with wide
+      // leading ("Who We" / "Are"), sometimes in mixed display fonts, and
+      // merge into one heading. At body size a font change is a section
+      // head followed by a subhead, never a wrapped title.
+      (font === lastHeadingFont || (display && lastHeadingDisplay))
+    ) {
       const section = sections[sections.length - 1];
       const headingBlock = blocks[section.blockIds[0]];
       headingBlock.text += ` ${text}`;
@@ -268,6 +342,8 @@ export function parsePages(
     blocks[block.id] = block;
     if (kind === "heading") {
       sections.push({ id: `s${sections.length}`, title: text, blockIds: [block.id] });
+      lastHeadingFont = font;
+      lastHeadingDisplay = display;
     } else {
       sections[sections.length - 1].blockIds.push(block.id);
     }
@@ -280,15 +356,26 @@ export function parsePages(
       // A segment boundary is a column or band switch; a display title never
       // continues across one.
       lastKind = null;
-      const kept = segment.filter((line) => !furniture.has(lineKey(line)));
+      const minorityFonts = minorityFontsOf(segment);
+      // Caps-heading lines are exempt from the furniture filter: a sidebar
+      // label repeating at the same y across resume pages is content, not a
+      // footer. Caps only: the font signal would also resurrect the
+      // mixed-case brand strip that really is furniture.
+      const kept = segment.lines.filter(
+        (line) => !furniture.has(lineKey(line)) || isHeadingLine(line, bodySize),
+      );
       for (const group of groupBlocks(kept)) {
         // Split the block into runs of heading and body lines so a heading
         // sitting tight above its paragraph still becomes its own block.
         let run: Line[] = [];
         let runIsHeading = false;
         for (const line of group) {
-          const heading = isHeadingLine(line, bodySize);
-          if (run.length > 0 && heading !== runIsHeading) {
+          const heading = isHeadingLine(line, bodySize, minorityFonts);
+          // A font change between adjacent heading lines is a section head
+          // meeting a subhead, not a wrapped title: separate headings.
+          const fontBreak =
+            heading && runIsHeading && run.length > 0 && line.font !== run[run.length - 1].font;
+          if (run.length > 0 && (heading !== runIsHeading || fontBreak)) {
             emit(run, runIsHeading ? "heading" : "paragraph", pageIndex + 1);
             run = [];
           }

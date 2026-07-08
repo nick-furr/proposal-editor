@@ -24,6 +24,7 @@ export async function extractPdfPages(path: string): Promise<RawItem[][]> {
         y: item.transform[5],
         size: Math.abs(item.transform[3]),
         w: item.width,
+        font: item.fontName,
       });
     }
     pages.push(items);
