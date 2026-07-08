@@ -270,6 +270,33 @@ describe("column routing", () => {
     expect(texts.some((t) => t.includes("left notes here") && t.includes("prose"))).toBe(false);
   });
 
+  it("assigns a sidebar line that overhangs the channel to its column", () => {
+    // Measured on the resume pages: sidebar list lines poke into the
+    // whitespace channel without reaching the body column. They belong to
+    // the sidebar, not to the divider stream, or they chop the body prose
+    // into fragments.
+    const page = [
+      sidebar("office location", 700),
+      sidebar("northern branch", 686),
+      sidebar("years of practice", 672),
+      item("with several specialties", 60, 658, 12, 150),
+      body("The engineer manages daily operations across", 700),
+      body("the firm and oversees work in progress on", 686),
+      body("projects of every size in the region, while", 672),
+      body("coordinating funding and regulatory agencies", 658),
+      body("to keep approvals moving through review and", 644),
+      body("maximize the grant dollars available to the", 630),
+      body("client, with modeling platforms built for the", 616),
+      body("firm's own engineering applications in house.", 602),
+    ];
+    const texts = allText([page]);
+    expect(texts).toHaveLength(2);
+    expect(texts[0]).toBe(
+      "office location northern branch years of practice with several specialties",
+    );
+    expect(texts[1]).toContain("The engineer manages daily operations");
+  });
+
   it("does not column-split a page that is only a left/right aligned pair", () => {
     // The letterhead shape: one address line left, one date right. A channel
     // needs vertical extent; a single row is a span pair, not columns.

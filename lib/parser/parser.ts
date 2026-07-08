@@ -145,10 +145,16 @@ export function segmentPage(items: RawItem[]): Line[][] {
   const left: RawItem[] = [];
   const right: RawItem[] = [];
   const crossing: RawItem[] = [];
+  const mid = (channel.x0 + channel.x1) / 2;
   for (const it of usable) {
-    if (it.x + it.w <= channel.x0 + COLUMN_EDGE_TOL) left.push(it);
-    else if (it.x >= channel.x1 - COLUMN_EDGE_TOL) right.push(it);
-    else crossing.push(it);
+    // Only an item bridging the whole channel is a true divider. Sidebar
+    // lines overhang the channel without reaching the far column; they
+    // belong to their column, or they chop the other column's prose apart.
+    const straddles =
+      it.x <= channel.x0 + COLUMN_EDGE_TOL && it.x + it.w >= channel.x1 - COLUMN_EDGE_TOL;
+    if (straddles) crossing.push(it);
+    else if (it.x + it.w / 2 < mid) left.push(it);
+    else right.push(it);
   }
   const dividers = buildLines(crossing);
   const leftLines = buildLines(left);
