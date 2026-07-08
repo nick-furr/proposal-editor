@@ -297,17 +297,15 @@ describe("column routing", () => {
     expect(texts[1]).toContain("The engineer manages daily operations");
   });
 
-  it.fails("keeps full-width prose above the columned region as one block", () => {
-    // KNOWN LIMIT of single-channel routing, kept as an expected failure.
-    // The registration page's columns exist only in its lower region, and a
-    // sentence wrapping across full-width lines above them splits at the
-    // straddle boundary. A y-extent refinement was attempted and reverted:
-    // that page is really a three-column table region, and row-level extent
-    // detection made it worse. The right fix is region-scoped channels,
-    // which is v3 work on top of this v2 branch.
+  it("keeps full-width prose spanning the channel as one block", () => {
+    // Column-major assembly groups all full-width lines into one stream, so
+    // wrapped prose whose lines all straddle the channel reassembles. The
+    // residual limit (a wrapped sentence whose SECOND line is short enough
+    // to fall into a column) still splits; that needs region-scoped
+    // channels and stays a documented boundary.
     const page = [
       item("The firm is a corporation with principals, owners,", 60, 760, 12, 420),
-      item("a board of directors and officers.", 60, 746, 12, 180),
+      item("a board of directors and officers, as filed with the state.", 60, 746, 12, 420),
       sidebar("office location", 700),
       sidebar("northern branch", 686),
       sidebar("years of practice", 672),
@@ -318,11 +316,15 @@ describe("column routing", () => {
       body("to keep approvals moving through review and", 644),
       body("maximize the grant dollars available to the", 630),
       body("client, with modeling platforms built for the", 616),
-      body("firm's own engineering applications in house.", 602),
+      body("firm's own engineering applications in house,", 602),
+      body("across water, wastewater, and municipal work", 588),
+      body("of every size, with the same disciplined and", 574),
+      body("well documented process on each engagement,", 560),
+      body("start to finish and year over year besides.", 546),
     ];
     const texts = allText([page]);
     expect(texts[0]).toBe(
-      "The firm is a corporation with principals, owners, a board of directors and officers.",
+      "The firm is a corporation with principals, owners, a board of directors and officers, as filed with the state.",
     );
     expect(texts).toHaveLength(3);
   });

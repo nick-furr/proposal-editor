@@ -156,19 +156,19 @@ export function segmentPage(items: RawItem[]): Line[][] {
     else if (it.x + it.w / 2 < mid) left.push(it);
     else right.push(it);
   }
-  const dividers = buildLines(crossing);
-  const leftLines = buildLines(left);
-  const rightLines = buildLines(right);
-
-  const segments: Line[][] = [];
-  for (let k = -1; k < dividers.length; k++) {
-    if (k >= 0) segments.push([dividers[k]]);
-    const top = k === -1 ? Infinity : dividers[k].y;
-    const bottom = k + 1 < dividers.length ? dividers[k + 1].y : -Infinity;
-    const inBand = (line: Line) => line.y <= top && line.y > bottom;
-    segments.push(leftLines.filter(inBand));
-    segments.push(rightLines.filter(inBand));
-  }
+  // Column-major assembly: full-width lines first (the page title or name
+  // banner introduces the page), then the whole left column, then the whole
+  // right column. Band-interleaving was tried first and chopped sidebar
+  // sections apart wherever a divider crossed mid-page; a column is one
+  // reading unit. groupBlocks separates sections within each stream by its
+  // vertical gaps as usual.
+  // The column whose content starts higher on the page reads first: a name
+  // banner right of a photo leads its page even though it is column
+  // content, not a divider. Stable sort keeps left before right on ties.
+  const columns = [buildLines(left), buildLines(right)]
+    .filter((segment) => segment.length > 0)
+    .sort((a, b) => b[0].y - a[0].y);
+  const segments = [buildLines(crossing), ...columns];
   return segments.filter((segment) => segment.length > 0);
 }
 
