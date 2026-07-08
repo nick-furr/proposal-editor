@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { containsEntity, parseFindings, scanDocument } from "./consistency";
+import { containsEntity, parseFindings, revalidateScan, scanDocument } from "./consistency";
 
 describe("scanDocument", () => {
   it("flags another block that still mentions a swapped city", () => {
@@ -51,6 +51,83 @@ describe("scanDocument", () => {
     expect(withMention.hits).toEqual([{ blockId: "b2", entity: "55" }]);
     const without = scanDocument(before, after, "b1", { b2: "no numbers here" });
     expect(without.departed).toEqual([]);
+  });
+});
+
+describe("scanDocument entities", () => {
+  it("carries the removed entities so the scan can be revalidated later", () => {
+    const before = "This proposal is prepared for the City of Dixon.";
+    const after = "This proposal is prepared for the City of Fairview.";
+    const scan = scanDocument(before, after, "b1", { b2: "55 miles from Dixon." });
+    expect(scan.entities).toEqual(["Dixon"]);
+  });
+});
+
+describe("revalidateScan", () => {
+  const dixonScan = (hits: { blockId: string; entity: string }[]) => ({
+    entities: ["Dixon"],
+    hits,
+    departed: [],
+  });
+
+  it("empties when the last flagged block no longer mentions the entity", () => {
+    const scan = dixonScan([{ blockId: "b2", entity: "Dixon" }]);
+    const next = revalidateScan(scan, {
+      b1: "Prepared for the City of Fairview.",
+      b2: "Our office is 55 miles from Fairview.",
+    }, "b1");
+    expect(next.hits).toEqual([]);
+    expect(next.departed).toEqual([]);
+  });
+
+  it("keeps rows for blocks that still mention the entity", () => {
+    const scan = dixonScan([
+      { blockId: "b2", entity: "Dixon" },
+      { blockId: "b3", entity: "Dixon" },
+    ]);
+    const next = revalidateScan(scan, {
+      b1: "Prepared for the City of Fairview.",
+      b2: "Our office is 55 miles from Fairview.",
+      b3: "Serving the City of Dixon since 1985.",
+    }, "b1");
+    expect(next.hits).toEqual([{ blockId: "b3", entity: "Dixon" }]);
+  });
+
+  it("drops an entity entirely once the source block mentions it again", () => {
+    const scan = dixonScan([{ blockId: "b2", entity: "Dixon" }]);
+    const next = revalidateScan(scan, {
+      b1: "Prepared for the City of Dixon.",
+      b2: "Our office is 55 miles from Dixon.",
+    }, "b1");
+    expect(next.entities).toEqual([]);
+    expect(next.hits).toEqual([]);
+  });
+
+  it("gains a row when an undo restores a mention elsewhere", () => {
+    const scan = dixonScan([{ blockId: "b2", entity: "Dixon" }]);
+    const next = revalidateScan(scan, {
+      b1: "Prepared for the City of Fairview.",
+      b2: "Our office is 55 miles from Dixon.",
+      b3: "The Dixon plant upgrade finished early.",
+    }, "b1");
+    expect(next.hits).toEqual([
+      { blockId: "b2", entity: "Dixon" },
+      { blockId: "b3", entity: "Dixon" },
+    ]);
+  });
+
+  it("recomputes departed for a multi-word entity with no remaining mentions", () => {
+    const scan = {
+      entities: ["Dana Whitfield"],
+      hits: [{ blockId: "b2", entity: "Dana Whitfield" }],
+      departed: [],
+    };
+    const next = revalidateScan(scan, {
+      b1: "Officers: Lee Moran, Secretary.",
+      b2: "Lee Moran founded the firm.",
+    }, "b1");
+    expect(next.hits).toEqual([]);
+    expect(next.departed).toEqual(["Dana Whitfield"]);
   });
 });
 

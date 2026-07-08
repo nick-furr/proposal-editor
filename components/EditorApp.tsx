@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { groupHitsByBlock, MAX_CANDIDATES, scanDocument, type ConsistencyFinding, type ConsistencyScan } from "@/lib/consistency";
+import { groupHitsByBlock, MAX_CANDIDATES, revalidateScan, sameHits, scanDocument, type ConsistencyFinding, type ConsistencyScan } from "@/lib/consistency";
 import { MAX_BLOCK_CHARS } from "@/lib/limits";
 import { currentText, editedBlockIds, lastUndoableEvent, loadEvents, saveEvents } from "@/lib/editLog";
 import { sha256Hex } from "@/lib/hash";
@@ -371,8 +371,29 @@ export function EditorApp() {
     [],
   );
 
+  // Revalidate an existing card against the document as it stands now.
+  // Rows whose text no longer mentions the entity drop, a fully resolved
+  // card clears itself, and a changed hit set sends the judge back out
+  // because its verdicts described text that is no longer there.
+  const refreshCard = useCallback(
+    (card: ConsistencyUi, texts: Record<string, string>) => {
+      if (!card) return;
+      const scan = revalidateScan(card.scan, texts, card.source.blockId);
+      if (scan.hits.length === 0 && scan.departed.length === 0) {
+        clearConsistency();
+        return;
+      }
+      if (sameHits(scan.hits, card.scan.hits)) {
+        setConsistency({ ...card, scan });
+        return;
+      }
+      void judgeScan(scan, card.source, texts);
+    },
+    [clearConsistency, judgeScan],
+  );
+
   const runConsistencyCheck = useCallback(
-    (doc: ParsedDoc, events: EditEvent[], applied: ConsistencySource) => {
+    (doc: ParsedDoc, events: EditEvent[], applied: ConsistencySource, card: ConsistencyUi) => {
       // Other blocks are unaffected by this apply, so pre-apply events fold
       // to the correct current text; the applied block's entry is its new
       // text so revalidation sees the document as it now stands.
@@ -382,15 +403,15 @@ export function EditorApp() {
       }
       const scan = scanDocument(applied.before, applied.after, applied.blockId, texts);
       if (scan.hits.length === 0 && scan.departed.length === 0) {
-        // Nothing to report leaves the previous card and any in-flight judge
-        // call alone: a tone edit between follow-ups must not destroy
-        // pending findings. An apply that touches a flagged entity
-        // regenerates the card through its own scan.
+        // Nothing new to report. A tone edit between follow-ups must not
+        // destroy pending findings, but the card it keeps has to tell the
+        // truth about the document this apply just changed.
+        refreshCard(card, texts);
         return;
       }
       void judgeScan(scan, applied, texts);
     },
-    [judgeScan],
+    [judgeScan, refreshCard],
   );
 
   if (state.phase !== "ready") {
@@ -470,7 +491,7 @@ export function EditorApp() {
                     before: edit.baseText,
                     after: edit.proposal,
                     instruction: edit.instruction,
-                  });
+                  }, consistency);
                 }
               }}
               onReject={() => dispatch({ type: "edit_dismissed" })}
