@@ -33,7 +33,7 @@ Handoff document for the Buoyant founding engineer take-home. Everything decided
   - Stacked text dedupe: layered runs at near-identical coordinates with identical content collapse to one. Handle N copies, not just pairs (title interleaved as "SSttaatteemmeenntt", closing page tripled "Thank You Thank You Thank You").
   - Letter-spaced decorative text: consecutive single-character items on a line rejoin into words, or the block is classified decoration and excluded from editable set (contact block extracted as "D o n J e n k i n s").
   - Page furniture filter: lines recurring at the same page position across pages (footers, address strips) classified as furniture, not editable paragraphs.
-  - Small-caps extracts lowercase ("Scott vogler, pe"): cosmetic, leave as-is.
+  - Small-caps extracts lowercase (officer names arrive as typed): cosmetic, leave as-is.
 - Layout is designed brochure, not flowing document. Page 3 has side-by-side regions (client list left, team roster right). pdftotext reading order happened to be sane, but position-aware block grouping is the correct approach, not raw line order.
 - Segmentation gift: MECO uses ALL-CAPS red headings consistently (RELEVANT EXPERIENCE, YOUR TEAM). Free section boundaries.
 - KB corpus shares the pipeline: same parser handles knowledge base ingestion. Consistent firm voice across all 5 docs (confirmed by their README).
