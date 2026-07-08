@@ -367,6 +367,7 @@ export function EditorApp() {
                       setConfirmClear(true);
                       return;
                     }
+                    abortInFlight();
                     dispatch({ type: "clear_history" });
                     setConfirmClear(false);
                     setToast("History cleared, document reset to original");

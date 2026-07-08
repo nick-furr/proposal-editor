@@ -29,6 +29,9 @@ export async function downloadDocx(
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = doc.fileName.replace(/\.pdf$/i, "") + ".docx";
+  document.body.appendChild(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.remove();
+  // Deferred revoke: doing it synchronously can cancel the download in Safari.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
